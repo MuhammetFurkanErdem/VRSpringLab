@@ -1,13 +1,13 @@
 using UnityEngine;
 
 [RequireComponent(typeof(LineRenderer))]
-public class VelocityVector : MonoBehaviour
+public class AccelerationVector : MonoBehaviour
 {
     [SerializeField] private SpringSimulation springSimulation;
     [SerializeField] private Transform springEndPoint;
 
     [Header("Vector")]
-    [SerializeField] private float visualScale = 0.4f;
+    [SerializeField] private float visualScale = 0.04f;
     [SerializeField] private float maxLength = 0.5f;
     [SerializeField] private float width = 0.015f;
 
@@ -42,10 +42,10 @@ public class VelocityVector : MonoBehaviour
 
     private void Update()
     {
-        float velocity =
-            springSimulation.VelocityMetersPerSecond;
+        float acceleration =
+            springSimulation.AccelerationMetersPerSecondSquared;
 
-        if (Mathf.Abs(velocity) < 0.01f)
+        if (Mathf.Abs(acceleration) < 0.05f)
         {
             shaftRenderer.enabled = false;
             headRenderer.enabled = false;
@@ -57,16 +57,16 @@ public class VelocityVector : MonoBehaviour
 
         Vector3 start =
             springEndPoint.position +
-            Vector3.right * 0.18f;
+            Vector3.left * 0.18f;
 
         float length =
             Mathf.Min(
-                Mathf.Abs(velocity) * visualScale,
+                Mathf.Abs(acceleration) * visualScale,
                 maxLength
             );
 
         Vector3 direction =
-            velocity > 0f
+            acceleration > 0f
                 ? Vector3.down
                 : Vector3.up;
 
