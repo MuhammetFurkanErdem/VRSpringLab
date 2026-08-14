@@ -11,6 +11,10 @@ public class SpringVisual : MonoBehaviour
     [SerializeField] private float radius = 0.08f;
     [SerializeField] private float width = 0.02f;
 
+    [Header("End Taper")]
+    [SerializeField, Range(0.5f, 0.99f)]
+    private float endTaperStart = 0.88f;
+
     private LineRenderer lineRenderer;
 
     private void Awake()
@@ -49,21 +53,45 @@ public class SpringVisual : MonoBehaviour
                 ? Vector3.right
                 : Vector3.up;
 
-        Vector3 right = Vector3.Cross(axis, reference).normalized;
-        Vector3 forward = Vector3.Cross(axis, right).normalized;
+        Vector3 right =
+            Vector3.Cross(axis, reference).normalized;
+
+        Vector3 forward =
+            Vector3.Cross(axis, right).normalized;
 
         for (int i = 0; i <= segments; i++)
         {
             float t = i / (float)segments;
-            float angle = t * turns * Mathf.PI * 2f;
 
-            Vector3 center = Vector3.Lerp(start, end, t);
+            float angle =
+                t * turns * Mathf.PI * 2f;
+
+            Vector3 center =
+                Vector3.Lerp(start, end, t);
+
+            // Son kısımda yayın yarıçapını sıfıra doğru küçült.
+            float radiusMultiplier = 1f;
+
+            if (t > endTaperStart)
+            {
+                radiusMultiplier =
+                    Mathf.Clamp01(
+                        (1f - t) /
+                        (1f - endTaperStart)
+                    );
+            }
+
+            float currentRadius =
+                radius * radiusMultiplier;
 
             Vector3 offset =
-                right * Mathf.Cos(angle) * radius +
-                forward * Mathf.Sin(angle) * radius;
+                right * Mathf.Cos(angle) * currentRadius +
+                forward * Mathf.Sin(angle) * currentRadius;
 
-            lineRenderer.SetPosition(i, center + offset);
+            lineRenderer.SetPosition(
+                i,
+                center + offset
+            );
         }
     }
 }

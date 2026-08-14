@@ -1,11 +1,16 @@
 using UnityEngine;
-using UnityEngine.XR.Interaction.Toolkit;
-using UnityEngine.XR.Interaction.Toolkit.Interactors;
+using Oculus.Interaction;
 
 public class SpringSimulation : MonoBehaviour
 {
+    [Header("Spring")]
     [SerializeField] private Transform springSocketTransform;
-    [SerializeField] private XRSocketInteractor springSocket;
+
+    [Header("Meta Snap")]
+    [SerializeField] private SnapInteractable springSnapZone;
+
+    [SerializeField]
+    private SnapInteractor[] weightSnapInteractors;
 
     [Header("Spring Physics")]
     [SerializeField] private float springConstant = 4f; // N/m
@@ -17,33 +22,46 @@ public class SpringSimulation : MonoBehaviour
     private float velocity;
     private float acceleration;
 
+    private Rigidbody currentWeight;
+
+    // -------------------------
     // Public physics values
+    // -------------------------
+
     public float DisplacementMeters => displacement;
-    public float DisplacementCentimeters => displacement * 100f;
 
-    public float SpringConstant => springConstant;
+    public float DisplacementCentimeters =>
+        displacement * 100f;
 
-    public float VelocityMetersPerSecond => velocity;
+    public float SpringConstant =>
+        springConstant;
 
-    public float AccelerationMetersPerSecondSquared => acceleration;
+    public float VelocityMetersPerSecond =>
+        velocity;
+
+    public float AccelerationMetersPerSecondSquared =>
+        acceleration;
+
+    public bool HasWeight =>
+        currentWeight != null;
+
+    public Rigidbody CurrentWeight =>
+        currentWeight;
+
+    public void SetSpringConstant(float value)
+    {
+        springConstant = Mathf.Max(0.01f, value);
+    }
 
     public float EquilibriumDisplacementMeters
     {
         get
         {
-            if (!springSocket.hasSelection)
-                return 0f;
-
-            var selected = springSocket.interactablesSelected[0];
-
-            Rigidbody rb =
-                selected.transform.GetComponent<Rigidbody>();
-
-            if (rb == null)
+            if (currentWeight == null)
                 return 0f;
 
             return
-                (rb.mass * Physics.gravity.magnitude)
+                (currentWeight.mass * Physics.gravity.magnitude)
                 / springConstant;
         }
     }
@@ -56,38 +74,59 @@ public class SpringSimulation : MonoBehaviour
 
     private void FixedUpdate()
     {
-        // Yayda ağırlık yoksa sistemi başlangıç konumuna getir
-        if (!springSocket.hasSelection)
+        FindSnappedWeight();
+
+        if (currentWeight == null)
         {
-            displacement = 0f;
-            velocity = 0f;
-            acceleration = 0f;
-
-            springSocketTransform.localPosition =
-                restLocalPosition;
-
+            ResetSpring();
             return;
         }
 
-        // Socket'a takılı nesneyi al
-        var selectedInteractable =
-            springSocket.interactablesSelected[0];
+        SimulateSpring();
+    }
 
-        Transform selectedTransform =
-            selectedInteractable.transform;
+    // ------------------------------------------------
+    // Hangi ağırlığın Meta SnapZone'a bağlı olduğunu bul
+    // ------------------------------------------------
 
-        Rigidbody weight =
-            selectedTransform.GetComponent<Rigidbody>();
+    private void FindSnappedWeight()
+    {
+        currentWeight = null;
 
-        if (weight == null)
+        foreach (SnapInteractor snapInteractor
+                 in weightSnapInteractors)
         {
-            acceleration = 0f;
+            if (snapInteractor == null)
+                continue;
+
+            if (!snapInteractor.HasSelectedInteractable)
+                continue;
+
+            if (snapInteractor.SelectedInteractable
+                != springSnapZone)
+                continue;
+
+            Rigidbody rb =
+                snapInteractor.GetComponent<Rigidbody>();
+
+            if (rb == null)
+                continue;
+
+            currentWeight = rb;
+
             return;
         }
+    }
 
-        float mass = weight.mass;
+    // -------------------------
+    // Yay fiziği
+    // -------------------------
 
-        // Kuvvetler
+    private void SimulateSpring()
+    {
+        float mass =
+            currentWeight.mass;
+
         float gravityForce =
             mass * Physics.gravity.magnitude;
 
@@ -97,27 +136,36 @@ public class SpringSimulation : MonoBehaviour
         float dampingForce =
             damping * velocity;
 
-        // Net kuvvet
         float netForce =
             gravityForce
             - springForce
             - dampingForce;
 
-        // F = ma  →  a = F / m
         acceleration =
             netForce / mass;
 
-        // Hız
         velocity +=
             acceleration * Time.fixedDeltaTime;
 
-        // Konum / uzama
         displacement +=
             velocity * Time.fixedDeltaTime;
 
-        // Socket'ı aşağı doğru hareket ettir
         springSocketTransform.localPosition =
             restLocalPosition
             + Vector3.down * displacement;
+    }
+
+    // -------------------------
+    // Başlangıç durumu
+    // -------------------------
+
+    private void ResetSpring()
+    {
+        displacement = 0f;
+        velocity = 0f;
+        acceleration = 0f;
+
+        springSocketTransform.localPosition =
+            restLocalPosition;
     }
 }
