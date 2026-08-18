@@ -21,6 +21,10 @@ public class SpringSimulation : MonoBehaviour
     private float displacement;
     private float velocity;
     private float acceleration;
+    private float gravityForce;
+    private float springForce;
+    private float dampingForce;
+    private float netForce;
 
     private Rigidbody currentWeight;
 
@@ -30,23 +34,22 @@ public class SpringSimulation : MonoBehaviour
 
     public float DisplacementMeters => displacement;
 
-    public float DisplacementCentimeters =>
-        displacement * 100f;
+    public float DisplacementCentimeters => displacement * 100f;
 
-    public float SpringConstant =>
-        springConstant;
+    public float SpringConstant => springConstant;
 
-    public float VelocityMetersPerSecond =>
-        velocity;
+    public float VelocityMetersPerSecond => velocity;
 
-    public float AccelerationMetersPerSecondSquared =>
-        acceleration;
+    public float AccelerationMetersPerSecondSquared => acceleration;
 
-    public bool HasWeight =>
-        currentWeight != null;
+    public bool HasWeight => currentWeight != null;
 
-    public Rigidbody CurrentWeight =>
-        currentWeight;
+    public Rigidbody CurrentWeight => currentWeight;
+
+    public float GravityForceNewtons => gravityForce;
+    public float SpringForceNewtons => springForce;
+    public float DampingForceNewtons => dampingForce;
+    public float NetForceNewtons => netForce;
 
     public void SetSpringConstant(float value)
     {
@@ -127,16 +130,16 @@ public class SpringSimulation : MonoBehaviour
         float mass =
             currentWeight.mass;
 
-        float gravityForce =
+        gravityForce =
             mass * Physics.gravity.magnitude;
 
-        float springForce =
+        springForce =
             springConstant * displacement;
 
-        float dampingForce =
+        dampingForce =
             damping * velocity;
 
-        float netForce =
+        netForce =
             gravityForce
             - springForce
             - dampingForce;
@@ -164,6 +167,11 @@ public class SpringSimulation : MonoBehaviour
         displacement = 0f;
         velocity = 0f;
         acceleration = 0f;
+
+        gravityForce = 0f;
+        springForce = 0f;
+        dampingForce = 0f;
+        netForce = 0f;
 
         springSocketTransform.localPosition =
             restLocalPosition;

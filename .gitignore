@@ -107,3 +107,7 @@ InitTestScene*.unity*
 
 # Local temporary assembly
 /TempAssembly.dll
+
+# Unity generated/recovery
+Assets/_Recovery/
+UIElementsSchema/
