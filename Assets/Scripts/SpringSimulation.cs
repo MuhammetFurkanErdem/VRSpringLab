@@ -16,11 +16,18 @@ public class SpringSimulation : MonoBehaviour
     [SerializeField] private float springConstant = 4f; // N/m
     [SerializeField] private float damping = 0.35f;
 
+    [Header("Simulation Time")]
+    [SerializeField] private bool isPaused = false;
+
+    [SerializeField]
+    private float simulationSpeed = 1f;
+
     private Vector3 restLocalPosition;
 
     private float displacement;
     private float velocity;
     private float acceleration;
+
     private float gravityForce;
     private float springForce;
     private float dampingForce;
@@ -28,33 +35,90 @@ public class SpringSimulation : MonoBehaviour
 
     private Rigidbody currentWeight;
 
-    // -------------------------
+    // ------------------------------------------------
     // Public physics values
-    // -------------------------
+    // ------------------------------------------------
 
-    public float DisplacementMeters => displacement;
+    public float DisplacementMeters =>
+        displacement;
 
-    public float DisplacementCentimeters => displacement * 100f;
+    public float DisplacementCentimeters =>
+        displacement * 100f;
 
-    public float SpringConstant => springConstant;
+    public float SpringConstant =>
+        springConstant;
 
-    public float VelocityMetersPerSecond => velocity;
+    public float VelocityMetersPerSecond =>
+        velocity;
 
-    public float AccelerationMetersPerSecondSquared => acceleration;
+    public float AccelerationMetersPerSecondSquared =>
+        acceleration;
 
-    public bool HasWeight => currentWeight != null;
+    public bool HasWeight =>
+        currentWeight != null;
 
-    public Rigidbody CurrentWeight => currentWeight;
+    public Rigidbody CurrentWeight =>
+        currentWeight;
 
-    public float GravityForceNewtons => gravityForce;
-    public float SpringForceNewtons => springForce;
-    public float DampingForceNewtons => dampingForce;
-    public float NetForceNewtons => netForce;
+    public float GravityForceNewtons =>
+        gravityForce;
+
+    public float SpringForceNewtons =>
+        springForce;
+
+    public float DampingForceNewtons =>
+        dampingForce;
+
+    public float NetForceNewtons =>
+        netForce;
+
+    // ------------------------------------------------
+    // Simulation time
+    // ------------------------------------------------
+
+    public bool IsPaused =>
+        isPaused;
+
+    public float SimulationSpeed =>
+        simulationSpeed;
+
+    public float SimulationDeltaTime =>
+        isPaused
+            ? 0f
+            : Time.fixedDeltaTime * simulationSpeed;
+
+    // ------------------------------------------------
+    // Spring settings
+    // ------------------------------------------------
 
     public void SetSpringConstant(float value)
     {
-        springConstant = Mathf.Max(0.01f, value);
+        springConstant =
+            Mathf.Max(0.01f, value);
     }
+
+    // ------------------------------------------------
+    // Pause / Resume
+    // ------------------------------------------------
+
+    public void SetPaused(bool paused)
+    {
+        isPaused = paused;
+    }
+
+    // ------------------------------------------------
+    // Slow motion
+    // ------------------------------------------------
+
+    public void SetSlowMotion(bool slow)
+    {
+        simulationSpeed =
+            slow ? 0.25f : 1f;
+    }
+
+    // ------------------------------------------------
+    // Equilibrium
+    // ------------------------------------------------
 
     public float EquilibriumDisplacementMeters
     {
@@ -64,7 +128,8 @@ public class SpringSimulation : MonoBehaviour
                 return 0f;
 
             return
-                (currentWeight.mass * Physics.gravity.magnitude)
+                (currentWeight.mass *
+                 Physics.gravity.magnitude)
                 / springConstant;
         }
     }
@@ -84,6 +149,10 @@ public class SpringSimulation : MonoBehaviour
             ResetSpring();
             return;
         }
+
+        // Ağırlık bağlı kalır fakat yay fiziği durur.
+        if (isPaused)
+            return;
 
         SimulateSpring();
     }
@@ -116,14 +185,13 @@ public class SpringSimulation : MonoBehaviour
                 continue;
 
             currentWeight = rb;
-
             return;
         }
     }
 
-    // -------------------------
+    // ------------------------------------------------
     // Yay fiziği
-    // -------------------------
+    // ------------------------------------------------
 
     private void SimulateSpring()
     {
@@ -147,20 +215,25 @@ public class SpringSimulation : MonoBehaviour
         acceleration =
             netForce / mass;
 
+        // Normal modda Time.fixedDeltaTime,
+        // yavaş modda bunun %25'i kullanılır.
+        float dt =
+            SimulationDeltaTime;
+
         velocity +=
-            acceleration * Time.fixedDeltaTime;
+            acceleration * dt;
 
         displacement +=
-            velocity * Time.fixedDeltaTime;
+            velocity * dt;
 
         springSocketTransform.localPosition =
             restLocalPosition
             + Vector3.down * displacement;
     }
 
-    // -------------------------
+    // ------------------------------------------------
     // Başlangıç durumu
-    // -------------------------
+    // ------------------------------------------------
 
     private void ResetSpring()
     {

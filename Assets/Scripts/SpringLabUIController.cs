@@ -11,6 +11,7 @@ public class SpringLabUIController : MonoBehaviour
     [SerializeField] private GameObject accelerationVector;
     [SerializeField] private GameObject gravityForceVector;
     [SerializeField] private GameObject springForceVector;
+    [SerializeField] private SpringSimulation springSimulation;
 
     public void SetFreeLengthVisible(bool visible)
     {
@@ -50,5 +51,16 @@ public class SpringLabUIController : MonoBehaviour
     {
         if (springInfo != null)
             springInfo.SetActive(visible);
+    }
+    public void SetSimulationPaused(bool paused)
+    {
+        if (springSimulation != null)
+            springSimulation.SetPaused(paused);
+    }
+
+    public void SetSlowMotion(bool slow)
+    {
+        if (springSimulation != null)
+            springSimulation.SetSlowMotion(slow);
     }
 }

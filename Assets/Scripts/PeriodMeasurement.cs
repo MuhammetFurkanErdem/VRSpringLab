@@ -2,13 +2,23 @@ using UnityEngine;
 
 public class PeriodMeasurement : MonoBehaviour
 {
-    [SerializeField] private SpringSimulation springSimulation;
+    [SerializeField]
+    private SpringSimulation springSimulation;
 
     private float previousRelativePosition;
     private float lastCrossingTime = -1f;
-    [SerializeField] private float measuredPeriod;
 
-    public float MeasuredPeriod => measuredPeriod;
+    [SerializeField]
+    private float measuredPeriod;
+
+    private float simulationTime;
+
+    // ------------------------------------------------
+    // Public values
+    // ------------------------------------------------
+
+    public float MeasuredPeriod =>
+        measuredPeriod;
 
     public float TheoreticalPeriod
     {
@@ -27,8 +37,10 @@ public class PeriodMeasurement : MonoBehaviour
             float k =
                 springSimulation.SpringConstant;
 
-            return 2f * Mathf.PI *
-                   Mathf.Sqrt(mass / k);
+            return
+                2f *
+                Mathf.PI *
+                Mathf.Sqrt(mass / k);
         }
     }
 
@@ -41,12 +53,27 @@ public class PeriodMeasurement : MonoBehaviour
             return;
         }
 
+        // Pause sırasında 0,
+        // normal modda fixedDeltaTime,
+        // slow motion'da fixedDeltaTime * 0.25.
+        simulationTime +=
+            springSimulation.SimulationDeltaTime;
+
+        // Pause durumunda ölçüm yapma.
+        if (springSimulation.IsPaused)
+            return;
+
         float relativePosition =
             springSimulation.DisplacementMeters -
             springSimulation.EquilibriumDisplacementMeters;
 
+        // ------------------------------------------------
         // Denge noktasını aşağı yönde geçiş.
-        // Aynı yöndeki iki geçiş arasında tam 1 periyot vardır.
+        //
+        // Aynı yöndeki iki denge geçişi arasındaki süre
+        // tam bir periyottur.
+        // ------------------------------------------------
+
         bool crossedDownward =
             previousRelativePosition < 0f &&
             relativePosition >= 0f &&
@@ -54,15 +81,18 @@ public class PeriodMeasurement : MonoBehaviour
 
         if (crossedDownward)
         {
-            float currentTime = Time.time;
+            float currentTime =
+                simulationTime;
 
             if (lastCrossingTime >= 0f)
             {
                 measuredPeriod =
-                    currentTime - lastCrossingTime;
+                    currentTime -
+                    lastCrossingTime;
             }
 
-            lastCrossingTime = currentTime;
+            lastCrossingTime =
+                currentTime;
         }
 
         previousRelativePosition =
@@ -72,7 +102,11 @@ public class PeriodMeasurement : MonoBehaviour
     private void ResetMeasurement()
     {
         previousRelativePosition = 0f;
+
         lastCrossingTime = -1f;
+
         measuredPeriod = 0f;
+
+        simulationTime = 0f;
     }
 }
