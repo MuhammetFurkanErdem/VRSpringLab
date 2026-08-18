@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.UI;
 
 public class SpringLabUIController : MonoBehaviour
 {
@@ -11,31 +12,44 @@ public class SpringLabUIController : MonoBehaviour
     [SerializeField] private GameObject accelerationVector;
     [SerializeField] private GameObject gravityForceVector;
     [SerializeField] private GameObject springForceVector;
+
+    [Header("Simulation")]
     [SerializeField] private SpringSimulation springSimulation;
+    [SerializeField] private PeriodMeasurement periodMeasurement;
+
+    [Header("Reset UI")]
+    [SerializeField] private Slider springConstantSlider;
+    [SerializeField] private Toggle pauseToggle;
+    [SerializeField] private Toggle slowMotionToggle;
 
     public void SetFreeLengthVisible(bool visible)
     {
-        freeLengthLine.SetActive(visible);
+        if (freeLengthLine != null)
+            freeLengthLine.SetActive(visible);
     }
 
     public void SetEquilibriumVisible(bool visible)
     {
-        equilibriumLine.SetActive(visible);
+        if (equilibriumLine != null)
+            equilibriumLine.SetActive(visible);
     }
 
     public void SetDisplacementVisible(bool visible)
     {
-        displacementInfo.SetActive(visible);
+        if (displacementInfo != null)
+            displacementInfo.SetActive(visible);
     }
 
     public void SetVelocityVisible(bool visible)
     {
-        velocityVector.SetActive(visible);
+        if (velocityVector != null)
+            velocityVector.SetActive(visible);
     }
 
     public void SetAccelerationVisible(bool visible)
     {
-        accelerationVector.SetActive(visible);
+        if (accelerationVector != null)
+            accelerationVector.SetActive(visible);
     }
 
     public void SetForcesVisible(bool visible)
@@ -52,6 +66,7 @@ public class SpringLabUIController : MonoBehaviour
         if (springInfo != null)
             springInfo.SetActive(visible);
     }
+
     public void SetSimulationPaused(bool paused)
     {
         if (springSimulation != null)
@@ -62,5 +77,33 @@ public class SpringLabUIController : MonoBehaviour
     {
         if (springSimulation != null)
             springSimulation.SetSlowMotion(slow);
+    }
+
+    // ------------------------------------------------
+    // Reset Experiment
+    // ------------------------------------------------
+
+    public void ResetExperiment()
+    {
+        // Simülasyonu başlangıç durumuna döndür.
+        if (springSimulation != null)
+            springSimulation.ResetSimulation();
+
+        // Periyot ölçümünü temizle.
+        if (periodMeasurement != null)
+            periodMeasurement.ResetMeasurement();
+
+        // Slider'ı başlangıç değerine getir.
+        // Normal value kullanıyoruz ki Value Text de güncellensin.
+        if (springConstantSlider != null)
+            springConstantSlider.value = 4f;
+
+        // Pause görselini ve durumunu kapat.
+        if (pauseToggle != null)
+            pauseToggle.isOn = false;
+
+        // Slow Motion görselini ve durumunu kapat.
+        if (slowMotionToggle != null)
+            slowMotionToggle.isOn = false;
     }
 }

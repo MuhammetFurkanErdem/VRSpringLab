@@ -13,6 +13,7 @@ public class PeriodMeasurement : MonoBehaviour
 
     private float simulationTime;
 
+
     // ------------------------------------------------
     // Public values
     // ------------------------------------------------
@@ -99,7 +100,7 @@ public class PeriodMeasurement : MonoBehaviour
             relativePosition;
     }
 
-    private void ResetMeasurement()
+    public void ResetMeasurement()
     {
         previousRelativePosition = 0f;
 

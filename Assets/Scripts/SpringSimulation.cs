@@ -249,4 +249,14 @@ public class SpringSimulation : MonoBehaviour
         springSocketTransform.localPosition =
             restLocalPosition;
     }
+
+    public void ResetSimulation()
+    {
+        springConstant = 4f;
+
+        isPaused = false;
+        simulationSpeed = 1f;
+
+        ResetSpring();
+    }
 }
