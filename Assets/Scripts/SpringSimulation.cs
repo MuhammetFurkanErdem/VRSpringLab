@@ -39,6 +39,11 @@ public class SpringSimulation : MonoBehaviour
     // Public physics values
     // ------------------------------------------------
 
+    public Vector3 SpringSocketWorldPosition =>
+    springSocketTransform != null
+        ? springSocketTransform.position
+        : transform.position;
+
     public float DisplacementMeters =>
         displacement;
 
