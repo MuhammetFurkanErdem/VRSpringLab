@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 
 public class SpringLabUIController : MonoBehaviour
 {
@@ -23,6 +24,7 @@ public class SpringLabUIController : MonoBehaviour
     [SerializeField] private Toggle pauseToggle;
     [SerializeField] private Toggle slowMotionToggle;
     [SerializeField] private Toggle gravityToggle;
+    [SerializeField] private TMP_Dropdown gravityPresetDropdown;
 
     public void SetFreeLengthVisible(bool visible)
     {
@@ -93,6 +95,12 @@ public class SpringLabUIController : MonoBehaviour
             springSimulation.SetGravityEnabled(enabled);
     }
 
+    public void SetGravityPreset(int index)
+    {
+        if (springSimulation != null)
+            springSimulation.SetGravityPreset(index);
+    }
+
     // ------------------------------------------------
     // Reset Experiment
     // ------------------------------------------------
@@ -123,5 +131,9 @@ public class SpringLabUIController : MonoBehaviour
         // Yer çekimi durumunu ve toggle görselini başlangıca döndür.
         if (gravityToggle != null)
             gravityToggle.isOn = true;
+
+        // Gezegen seçimini Dünya'ya döndür.
+        if (gravityPresetDropdown != null)
+            gravityPresetDropdown.value = 0;
     }
 }

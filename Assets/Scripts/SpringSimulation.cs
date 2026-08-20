@@ -16,6 +16,7 @@ public class SpringSimulation : MonoBehaviour
     [SerializeField] private float springConstant = 4f; // N/m
     [SerializeField] private float damping = 0.35f;
     [SerializeField] private bool gravityEnabled = true;
+    [SerializeField] private float selectedGravity = 9.81f;
 
     [Header("Simulation Time")]
     [SerializeField] private bool isPaused = false;
@@ -81,6 +82,12 @@ public class SpringSimulation : MonoBehaviour
     public bool GravityEnabled =>
         gravityEnabled;
 
+    public float SelectedGravity =>
+        selectedGravity;
+
+    public float EffectiveGravity =>
+        gravityEnabled ? selectedGravity : 0f;
+
     // ------------------------------------------------
     // Simulation time
     // ------------------------------------------------
@@ -114,6 +121,24 @@ public class SpringSimulation : MonoBehaviour
             gravityForce = 0f;
     }
 
+    public void SetGravityPreset(int index)
+    {
+        switch (index)
+        {
+            case 1:
+                selectedGravity = 1.62f;
+                break;
+
+            case 2:
+                selectedGravity = 3.71f;
+                break;
+
+            default:
+                selectedGravity = 9.81f;
+                break;
+        }
+    }
+
     // ------------------------------------------------
     // Pause / Resume
     // ------------------------------------------------
@@ -141,13 +166,12 @@ public class SpringSimulation : MonoBehaviour
     {
         get
         {
-            if (currentWeight == null ||
-                !gravityEnabled)
+            if (currentWeight == null)
                 return 0f;
 
             return
                 (currentWeight.mass *
-                 Physics.gravity.magnitude)
+                 EffectiveGravity)
                 / springConstant;
         }
     }
@@ -217,9 +241,7 @@ public class SpringSimulation : MonoBehaviour
             currentWeight.mass;
 
         gravityForce =
-            gravityEnabled
-                ? mass * Physics.gravity.magnitude
-                : 0f;
+            mass * EffectiveGravity;
 
         springForce =
             springConstant * displacement;
@@ -277,6 +299,7 @@ public class SpringSimulation : MonoBehaviour
         isPaused = false;
         simulationSpeed = 1f;
         gravityEnabled = true;
+        selectedGravity = 9.81f;
 
         ResetSpring();
     }
