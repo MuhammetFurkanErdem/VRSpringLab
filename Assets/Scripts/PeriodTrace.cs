@@ -13,7 +13,7 @@ public class PeriodTrace : MonoBehaviour
     [SerializeField]
     private float depthOffset = 0f;
 
-    [Tooltip("Ardışık izlerin hafif yana kayması.")]
+    [Tooltip("Aktif ve sönmekte olan izlerin birbirinden hafifçe ayrılması.")]
     [SerializeField]
     private float laneSeparation = 0.025f;
 
@@ -32,96 +32,88 @@ public class PeriodTrace : MonoBehaviour
     [SerializeField]
     private float centerThreshold = 0.002f;
 
-    [Header("Pool")]
-    [SerializeField]
-    private int strokeCount = 6;
+    private LineRenderer activeRenderer;
+    private LineRenderer fadingRenderer;
 
-    private class TraceStroke
-    {
-        public LineRenderer renderer;
+    private Rigidbody trackedWeight;
 
-        public bool active;
-        public bool fading;
-
-        public float fadeTime;
-
-        public float centerY;
-        public float extremeY;
-
-        // -1 = merkezin üstü
-        //  1 = merkezin altı
-        public int side;
-
-        public float x;
-        public float z;
-    }
-
-    private TraceStroke[] strokes;
-
-    private int currentStrokeIndex = -1;
-    private int nextStrokeIndex;
+    private bool hasActiveTrace;
+    private bool isFading;
 
     private int lastSide;
 
-    private bool hasWeight;
+    private float activeStartY;
+    private float activePeakY;
+    private float activeBaseX;
+    private float activeZ;
+
+    private float fadeTime;
 
     private void Awake()
     {
-        CreateStrokePool();
-        ClearAllStrokes();
+        activeRenderer = GetComponent<LineRenderer>();
+        ConfigureRenderer(activeRenderer);
+
+        GameObject fadingObject = new GameObject("FadingTrace");
+        fadingObject.transform.SetParent(transform, false);
+
+        fadingRenderer = fadingObject.AddComponent<LineRenderer>();
+        fadingRenderer.sharedMaterial = activeRenderer.sharedMaterial;
+        fadingRenderer.sortingLayerID = activeRenderer.sortingLayerID;
+        fadingRenderer.sortingOrder = activeRenderer.sortingOrder;
+        fadingRenderer.alignment = activeRenderer.alignment;
+        fadingRenderer.textureMode = activeRenderer.textureMode;
+
+        ConfigureRenderer(fadingRenderer);
+        ClearTraces();
     }
 
     private void Update()
     {
-        UpdateFadingStrokes();
+        UpdateFadingTrace();
 
         if (springSimulation == null ||
             !springSimulation.HasWeight ||
             springSimulation.CurrentWeight == null)
         {
-            if (hasWeight)
+            if (trackedWeight != null)
             {
-                ClearAllStrokes();
-                hasWeight = false;
+                trackedWeight = null;
+                ClearTraces();
             }
 
             return;
         }
 
-        Rigidbody weight =
-            springSimulation.CurrentWeight;
+        Rigidbody weight = springSimulation.CurrentWeight;
 
         float relativePosition =
             springSimulation.DisplacementMeters -
             springSimulation.EquilibriumDisplacementMeters;
 
-        int currentSide =
-            GetSide(relativePosition);
+        int currentSide = GetSide(relativePosition);
 
-        // Ağırlık yeni bağlandı.
-        if (!hasWeight)
+        if (trackedWeight != weight)
         {
-            hasWeight = true;
-
+            trackedWeight = weight;
+            ClearTraces();
+            BeginActiveTrace(weight, weight.position.y);
             lastSide = currentSide;
-            currentStrokeIndex = -1;
-
-            return;
         }
-
-        // ------------------------------------------------
-        // Salınım merkezini geçti mi?
-        // ------------------------------------------------
 
         if (currentSide != 0 &&
             lastSide != 0 &&
             currentSide != lastSide)
         {
-            StartNewStroke(
-                weight,
-                currentSide,
-                relativePosition
-            );
+            CompleteActiveTrace();
+
+            // Displacement aşağı yönde pozitifken world Y azalır.
+            // Bu yüzden mevcut kütle Y'sine göreli displacement eklenerek
+            // sabit equilibrium world Y bulunur.
+            float equilibriumY =
+                weight.position.y + relativePosition;
+
+            BeginActiveTrace(weight, equilibriumY);
         }
 
         if (currentSide != 0)
@@ -129,361 +121,155 @@ public class PeriodTrace : MonoBehaviour
             lastSide = currentSide;
         }
 
-        UpdateCurrentStroke(weight);
+        UpdateActiveTrace(weight.position.y);
     }
 
-    // ------------------------------------------------
-    // Yeni yarım salınım başlat
-    // ------------------------------------------------
-
-    private void StartNewStroke(
+    private void BeginActiveTrace(
         Rigidbody weight,
-        int newSide,
-        float relativePosition)
+        float startY)
     {
-        // Önceki aktif çizgi artık tamamlandı.
-        if (currentStrokeIndex >= 0)
-        {
-            TraceStroke oldStroke =
-                strokes[currentStrokeIndex];
+        activeStartY = startY;
+        activePeakY = startY;
 
-            oldStroke.active = false;
-            oldStroke.fading = true;
-            oldStroke.fadeTime = 0f;
-        }
+        activeBaseX =
+            weight.position.x + horizontalOffset;
 
-        currentStrokeIndex =
-            nextStrokeIndex;
+        activeZ =
+            weight.position.z + depthOffset;
 
-        nextStrokeIndex =
-            (nextStrokeIndex + 1) %
-            strokes.Length;
-
-        TraceStroke stroke =
-            strokes[currentStrokeIndex];
-
-        ResetStroke(stroke);
-
-        // ------------------------------------------------
-        // Denge noktasının world-space Y konumu
-        //
-        // displacement arttıkça obje aşağı indiği için
-        // relativePosition'ı mevcut Y'ye ekleyerek
-        // denge merkezini buluyoruz.
-        // ------------------------------------------------
-
-        float equilibriumY =
-            weight.position.y +
-            relativePosition;
-
-        float laneOffset =
-            (currentStrokeIndex % 2 == 0)
-                ? -laneSeparation * 0.5f
-                : laneSeparation * 0.5f;
-
-        stroke.centerY =
-            equilibriumY;
-
-        stroke.extremeY =
-            equilibriumY;
-
-        stroke.side =
-            newSide;
-
-        stroke.x =
-            weight.position.x +
-            horizontalOffset +
-            laneOffset;
-
-        stroke.z =
-            weight.position.z +
-            depthOffset;
-
-        stroke.active = true;
-
-        stroke.renderer.enabled = true;
-
-        SetStrokeAlpha(
-            stroke,
-            1f
-        );
-
-        DrawStroke(stroke);
+        hasActiveTrace = true;
+        activeRenderer.enabled = true;
+        SetRendererAlpha(activeRenderer, 1f);
+        DrawActiveTrace(weight.position.y);
     }
 
-    // ------------------------------------------------
-    // Aktif iz ağırlıkla birlikte büyür
-    // ------------------------------------------------
-
-    private void UpdateCurrentStroke(
-        Rigidbody weight)
+    private void UpdateActiveTrace(float currentY)
     {
-        if (currentStrokeIndex < 0)
+        if (!hasActiveTrace)
             return;
 
-        TraceStroke stroke =
-            strokes[currentStrokeIndex];
-
-        if (!stroke.active)
-            return;
-
-        float currentY =
-            weight.position.y;
-
-        // Merkezin altında.
-        // Unity Y değeri aşağı indikçe küçülüyor.
-        if (stroke.side > 0)
+        if (Mathf.Abs(currentY - activeStartY) >
+            Mathf.Abs(activePeakY - activeStartY))
         {
-            stroke.extremeY =
-                Mathf.Min(
-                    stroke.extremeY,
-                    currentY
-                );
+            activePeakY = currentY;
         }
 
-        // Merkezin üstünde.
-        else if (stroke.side < 0)
-        {
-            stroke.extremeY =
-                Mathf.Max(
-                    stroke.extremeY,
-                    currentY
-                );
-        }
-
-        DrawStroke(stroke);
+        // Aktif ucun extrema'da takılmaması için her frame doğrudan
+        // simülasyonun hareket ettirdiği Rigidbody world Y'si kullanılır.
+        DrawActiveTrace(currentY);
     }
 
-    // ------------------------------------------------
-    // Çizgiyi çiz
-    // ------------------------------------------------
-
-    private void DrawStroke(
-        TraceStroke stroke)
+    private void DrawActiveTrace(float currentY)
     {
-        Vector3 centerPoint =
-            new Vector3(
-                stroke.x,
-                stroke.centerY,
-                stroke.z
-            );
+        float x = activeBaseX + laneSeparation * 0.5f;
 
-        Vector3 extremePoint =
-            new Vector3(
-                stroke.x,
-                stroke.extremeY,
-                stroke.z
-            );
-
-        stroke.renderer.SetPosition(
+        activeRenderer.SetPosition(
             0,
-            centerPoint
-        );
+            new Vector3(x, activeStartY, activeZ));
 
-        stroke.renderer.SetPosition(
+        activeRenderer.SetPosition(
             1,
-            extremePoint
-        );
+            new Vector3(x, currentY, activeZ));
     }
 
-    // ------------------------------------------------
-    // Eski çizgileri yavaşça söndür
-    // ------------------------------------------------
-
-    private void UpdateFadingStrokes()
+    private void CompleteActiveTrace()
     {
-        if (strokes == null ||
-            springSimulation == null)
-        {
+        if (!hasActiveTrace)
             return;
-        }
 
-        // Pause durumunda iz de donsun.
-        float simulationDeltaTime =
-            springSimulation.IsPaused
-                ? 0f
-                : Time.deltaTime *
-                  springSimulation.SimulationSpeed;
+        float x = activeBaseX - laneSeparation * 0.5f;
 
-        foreach (TraceStroke stroke
-                 in strokes)
+        fadingRenderer.SetPosition(
+            0,
+            new Vector3(x, activeStartY, activeZ));
+
+        fadingRenderer.SetPosition(
+            1,
+            new Vector3(x, activePeakY, activeZ));
+
+        fadeTime = 0f;
+        isFading = true;
+        fadingRenderer.enabled = true;
+        SetRendererAlpha(fadingRenderer, 1f);
+
+        hasActiveTrace = false;
+        activeRenderer.enabled = false;
+    }
+
+    private void UpdateFadingTrace()
+    {
+        if (!isFading || springSimulation == null)
+            return;
+
+        if (springSimulation.IsPaused)
+            return;
+
+        fadeTime +=
+            Time.deltaTime * springSimulation.SimulationSpeed;
+
+        float alpha = fadeDuration > 0f
+            ? 1f - fadeTime / fadeDuration
+            : 0f;
+
+        alpha = Mathf.Clamp01(alpha);
+        SetRendererAlpha(fadingRenderer, alpha);
+
+        if (alpha <= 0f)
         {
-            if (!stroke.fading)
-                continue;
-
-            stroke.fadeTime +=
-                simulationDeltaTime;
-
-            float alpha =
-                1f -
-                (stroke.fadeTime /
-                 fadeDuration);
-
-            alpha =
-                Mathf.Clamp01(alpha);
-
-            SetStrokeAlpha(
-                stroke,
-                alpha
-            );
-
-            if (alpha <= 0f)
-            {
-                stroke.fading = false;
-                stroke.renderer.enabled = false;
-            }
+            isFading = false;
+            fadingRenderer.enabled = false;
         }
     }
 
-    // ------------------------------------------------
-    // Relative position hangi tarafta?
-    // ------------------------------------------------
-
-    private int GetSide(
-        float relativePosition)
+    private int GetSide(float relativePosition)
     {
-        if (relativePosition >
-            centerThreshold)
-        {
+        if (relativePosition > centerThreshold)
             return 1;
-        }
 
-        if (relativePosition <
-            -centerThreshold)
-        {
+        if (relativePosition < -centerThreshold)
             return -1;
-        }
 
         return 0;
     }
 
-    // ------------------------------------------------
-    // Renderer pool
-    // ------------------------------------------------
-
-    private void CreateStrokePool()
-    {
-        strokeCount =
-            Mathf.Max(2, strokeCount);
-
-        strokes =
-            new TraceStroke[strokeCount];
-
-        LineRenderer template =
-            GetComponent<LineRenderer>();
-
-        ConfigureRenderer(template);
-
-        strokes[0] =
-            new TraceStroke
-            {
-                renderer = template
-            };
-
-        for (int i = 1;
-             i < strokeCount;
-             i++)
-        {
-            GameObject strokeObject =
-                new GameObject(
-                    $"TraceStroke_{i}"
-                );
-
-            strokeObject.transform.SetParent(
-                transform,
-                false
-            );
-
-            LineRenderer renderer =
-                strokeObject.AddComponent<
-                    LineRenderer>();
-
-            renderer.sharedMaterial =
-                template.sharedMaterial;
-
-            ConfigureRenderer(renderer);
-
-            strokes[i] =
-                new TraceStroke
-                {
-                    renderer = renderer
-                };
-        }
-    }
-
-    private void ConfigureRenderer(
-        LineRenderer renderer)
+    private void ConfigureRenderer(LineRenderer renderer)
     {
         renderer.positionCount = 2;
-
         renderer.useWorldSpace = true;
-
-        renderer.startWidth =
-            lineWidth;
-
-        renderer.endWidth =
-            lineWidth;
-
+        renderer.startWidth = lineWidth;
+        renderer.endWidth = lineWidth;
         renderer.numCapVertices = 2;
-
         renderer.enabled = false;
     }
 
-    // ------------------------------------------------
-    // Alpha
-    // ------------------------------------------------
-
-    private void SetStrokeAlpha(
-        TraceStroke stroke,
+    private void SetRendererAlpha(
+        LineRenderer renderer,
         float alpha)
     {
-        Color color =
-            traceColor;
+        Color color = traceColor;
+        color.a *= alpha;
 
-        color.a =
-            alpha;
-
-        stroke.renderer.startColor =
-            color;
-
-        stroke.renderer.endColor =
-            color;
+        renderer.startColor = color;
+        renderer.endColor = color;
     }
 
-    // ------------------------------------------------
-    // Reset
-    // ------------------------------------------------
-
-    private void ResetStroke(
-        TraceStroke stroke)
+    private void ClearTraces()
     {
-        stroke.active = false;
-        stroke.fading = false;
-
-        stroke.fadeTime = 0f;
-
-        stroke.renderer.enabled = false;
-    }
-
-    private void ClearAllStrokes()
-    {
-        if (strokes == null)
-            return;
-
-        foreach (TraceStroke stroke
-                 in strokes)
-        {
-            ResetStroke(stroke);
-        }
-
-        currentStrokeIndex = -1;
-        nextStrokeIndex = 0;
+        hasActiveTrace = false;
+        isFading = false;
         lastSide = 0;
+        fadeTime = 0f;
+
+        if (activeRenderer != null)
+            activeRenderer.enabled = false;
+
+        if (fadingRenderer != null)
+            fadingRenderer.enabled = false;
     }
 
     private void OnDisable()
     {
-        ClearAllStrokes();
-        hasWeight = false;
+        trackedWeight = null;
+        ClearTraces();
     }
 }

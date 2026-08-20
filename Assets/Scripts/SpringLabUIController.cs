@@ -12,6 +12,7 @@ public class SpringLabUIController : MonoBehaviour
     [SerializeField] private GameObject accelerationVector;
     [SerializeField] private GameObject gravityForceVector;
     [SerializeField] private GameObject springForceVector;
+    [SerializeField] private GameObject periodTrace;
 
     [Header("Simulation")]
     [SerializeField] private SpringSimulation springSimulation;
@@ -65,6 +66,12 @@ public class SpringLabUIController : MonoBehaviour
     {
         if (springInfo != null)
             springInfo.SetActive(visible);
+    }
+
+    public void SetPeriodTraceVisible(bool visible)
+    {
+        if (periodTrace != null)
+            periodTrace.SetActive(visible);
     }
 
     public void SetSimulationPaused(bool paused)
