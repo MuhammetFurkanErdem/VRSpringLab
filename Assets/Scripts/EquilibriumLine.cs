@@ -20,7 +20,9 @@ public class EquilibriumLine : MonoBehaviour
         float displacement =
             springSimulation.EquilibriumDisplacementMeters;
 
-        bool hasWeight = displacement > 0f;
+        bool hasWeight =
+            springSimulation != null &&
+            springSimulation.HasWeight;
 
         lineRenderer.enabled = hasWeight;
 

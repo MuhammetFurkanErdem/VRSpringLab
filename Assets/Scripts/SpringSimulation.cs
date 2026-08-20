@@ -15,6 +15,7 @@ public class SpringSimulation : MonoBehaviour
     [Header("Spring Physics")]
     [SerializeField] private float springConstant = 4f; // N/m
     [SerializeField] private float damping = 0.35f;
+    [SerializeField] private bool gravityEnabled = true;
 
     [Header("Simulation Time")]
     [SerializeField] private bool isPaused = false;
@@ -77,6 +78,9 @@ public class SpringSimulation : MonoBehaviour
     public float NetForceNewtons =>
         netForce;
 
+    public bool GravityEnabled =>
+        gravityEnabled;
+
     // ------------------------------------------------
     // Simulation time
     // ------------------------------------------------
@@ -100,6 +104,14 @@ public class SpringSimulation : MonoBehaviour
     {
         springConstant =
             Mathf.Max(0.01f, value);
+    }
+
+    public void SetGravityEnabled(bool enabled)
+    {
+        gravityEnabled = enabled;
+
+        if (!gravityEnabled)
+            gravityForce = 0f;
     }
 
     // ------------------------------------------------
@@ -129,7 +141,8 @@ public class SpringSimulation : MonoBehaviour
     {
         get
         {
-            if (currentWeight == null)
+            if (currentWeight == null ||
+                !gravityEnabled)
                 return 0f;
 
             return
@@ -204,7 +217,9 @@ public class SpringSimulation : MonoBehaviour
             currentWeight.mass;
 
         gravityForce =
-            mass * Physics.gravity.magnitude;
+            gravityEnabled
+                ? mass * Physics.gravity.magnitude
+                : 0f;
 
         springForce =
             springConstant * displacement;
@@ -261,6 +276,7 @@ public class SpringSimulation : MonoBehaviour
 
         isPaused = false;
         simulationSpeed = 1f;
+        gravityEnabled = true;
 
         ResetSpring();
     }
