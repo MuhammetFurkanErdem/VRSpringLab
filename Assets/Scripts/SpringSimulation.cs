@@ -221,7 +221,7 @@ public class SpringSimulation : MonoBehaviour
                 continue;
 
             Rigidbody rb =
-                snapInteractor.GetComponent<Rigidbody>();
+                snapInteractor.GetComponentInParent<Rigidbody>();
 
             if (rb == null)
                 continue;
