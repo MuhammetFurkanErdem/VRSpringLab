@@ -23,6 +23,7 @@ public class SpringLabUIController : MonoBehaviour
     [SerializeField] private Slider springConstantSlider;
     [SerializeField] private Toggle pauseToggle;
     [SerializeField] private Toggle slowMotionToggle;
+    [SerializeField] private Toggle continuousOscillationToggle;
     [SerializeField] private Toggle gravityToggle;
     [SerializeField] private TMP_Dropdown gravityPresetDropdown;
 
@@ -89,6 +90,12 @@ public class SpringLabUIController : MonoBehaviour
             springSimulation.SetSlowMotion(slow);
     }
 
+    public void SetContinuousOscillation(bool enabled)
+    {
+        if (springSimulation != null)
+            springSimulation.SetContinuousOscillation(enabled);
+    }
+
     public void SetGravityEnabled(bool enabled)
     {
         if (springSimulation != null)
@@ -127,6 +134,10 @@ public class SpringLabUIController : MonoBehaviour
         // Slow Motion görselini ve durumunu kapat.
         if (slowMotionToggle != null)
             slowMotionToggle.isOn = false;
+
+        // ResetSimulation zaten fizik durumunu kapattığı için event'i tekrar çağırma.
+        if (continuousOscillationToggle != null)
+            continuousOscillationToggle.SetIsOnWithoutNotify(false);
 
         // Yer çekimi durumunu ve toggle görselini başlangıca döndür.
         if (gravityToggle != null)

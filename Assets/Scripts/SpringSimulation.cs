@@ -18,6 +18,13 @@ public class SpringSimulation : MonoBehaviour
     [SerializeField] private bool gravityEnabled = true;
     [SerializeField] private float selectedGravity = 9.81f;
 
+    [Header("Continuous Oscillation")]
+    [SerializeField] private bool continuousOscillation = false;
+    [SerializeField] private float continuousStartVelocity = 0.25f;
+
+    private const float ContinuousStartVelocityThreshold = 0.01f;
+    private const float ContinuousStartDisplacementThreshold = 0.01f;
+
     [Header("Simulation Time")]
     [SerializeField] private bool isPaused = false;
 
@@ -88,6 +95,9 @@ public class SpringSimulation : MonoBehaviour
     public float EffectiveGravity =>
         gravityEnabled ? selectedGravity : 0f;
 
+    public bool ContinuousOscillation =>
+        continuousOscillation;
+
     // ------------------------------------------------
     // Simulation time
     // ------------------------------------------------
@@ -156,6 +166,27 @@ public class SpringSimulation : MonoBehaviour
     {
         simulationSpeed =
             slow ? 0.25f : 1f;
+    }
+
+    public void SetContinuousOscillation(bool enabled)
+    {
+        if (continuousOscillation == enabled)
+            return;
+
+        continuousOscillation = enabled;
+
+        if (!continuousOscillation || currentWeight == null)
+            return;
+
+        float equilibriumOffset =
+            displacement - EquilibriumDisplacementMeters;
+
+        bool isStoppedAtEquilibrium =
+            Mathf.Abs(velocity) < ContinuousStartVelocityThreshold
+            && Mathf.Abs(equilibriumOffset) < ContinuousStartDisplacementThreshold;
+
+        if (isStoppedAtEquilibrium)
+            velocity = continuousStartVelocity;
     }
 
     // ------------------------------------------------
@@ -247,7 +278,9 @@ public class SpringSimulation : MonoBehaviour
             springConstant * displacement;
 
         dampingForce =
-            damping * velocity;
+            continuousOscillation
+                ? 0f
+                : damping * velocity;
 
         netForce =
             gravityForce
@@ -298,6 +331,7 @@ public class SpringSimulation : MonoBehaviour
 
         isPaused = false;
         simulationSpeed = 1f;
+        continuousOscillation = false;
         gravityEnabled = true;
         selectedGravity = 9.81f;
 
