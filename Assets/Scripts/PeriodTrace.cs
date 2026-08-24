@@ -50,15 +50,16 @@ public class PeriodTrace : MonoBehaviour
     private const int BelowEquilibrium = 1;
     private const int MovingUp = -1;
     private const int MovingDown = 1;
-    private const string LowerTraceObjectName = "LowerTrace";
+    private const int FinalTraceSegmentCount = 5;
+    private const string FinalTraceSegmentNamePrefix =
+        "FinalTraceSegment_";
 
     private enum TracePhase
     {
         WaitingForStart,
-        DrawingUpperOutbound,
-        DrawingUpperReturn,
-        DrawingLowerOutbound,
-        DrawingLowerReturn,
+        DrawingLeftOutbound,
+        DrawingCenterDescent,
+        DrawingRightReturn,
         Holding,
         Fading,
         Gap
@@ -69,9 +70,10 @@ public class PeriodTrace : MonoBehaviour
         new GradientColorKey[2];
     private readonly GradientAlphaKey[] alphaKeys =
         new GradientAlphaKey[2];
+    private readonly LineRenderer[] finalTraceSegmentRenderers =
+        new LineRenderer[FinalTraceSegmentCount];
 
     private LineRenderer upperTraceRenderer;
-    private LineRenderer lowerTraceRenderer;
     private Rigidbody trackedWeight;
     private TracePhase phase = TracePhase.WaitingForStart;
 
@@ -141,62 +143,45 @@ public class PeriodTrace : MonoBehaviour
             case TracePhase.WaitingForStart:
                 if (crossingDirection == MovingUp)
                 {
-                    StartUpperCycle(
+                    StartContinuousTrace(
                         weight.position.y,
                         equilibriumWorldY);
                 }
 
                 break;
 
-            case TracePhase.DrawingUpperOutbound:
+            case TracePhase.DrawingLeftOutbound:
                 upperTurningWorldY = Mathf.Max(
                     upperTurningWorldY,
                     weight.position.y);
 
-                DrawUpperOutbound(weight.position.y);
+                DrawLeftOutbound(weight.position.y);
 
                 if (newReliableDirection == MovingDown)
-                    StartUpperReturn(weight.position.y);
+                    StartCenterDescent(weight.position.y);
 
                 break;
 
-            case TracePhase.DrawingUpperReturn:
-                DrawUpperReturn(weight.position.y);
-
-                if (HasEnteredLowerHalf(
-                    crossingDirection,
-                    relativePosition))
-                {
-                    FinishUpperTrace(equilibriumWorldY);
-                    StartLowerOutbound(
-                        weight.position.y,
-                        equilibriumWorldY);
-                }
-
-                break;
-
-            case TracePhase.DrawingLowerOutbound:
+            case TracePhase.DrawingCenterDescent:
                 lowerTurningWorldY = Mathf.Min(
                     lowerTurningWorldY,
                     weight.position.y);
 
-                DrawLowerOutbound(weight.position.y);
+                DrawCenterDescent(weight.position.y);
 
                 if (newReliableDirection == MovingUp)
-                    StartLowerReturn(weight.position.y);
+                    StartRightReturn(weight.position.y);
 
                 break;
 
-            case TracePhase.DrawingLowerReturn:
-                DrawLowerReturn(weight.position.y);
+            case TracePhase.DrawingRightReturn:
+                DrawRightReturn(weight.position.y);
 
                 if (HasReturnedFromLowerHalf(
                     crossingDirection,
                     relativePosition))
                 {
-                    FinishLowerTrace(equilibriumWorldY);
-                    phase = TracePhase.Holding;
-                    phaseTime = 0f;
+                    FinishContinuousTrace(equilibriumWorldY);
                 }
 
                 break;
@@ -230,62 +215,77 @@ public class PeriodTrace : MonoBehaviour
             GetReliableMovementDirection();
     }
 
-    private void StartUpperCycle(
+    private void StartContinuousTrace(
         float currentWeightWorldY,
         float equilibriumWorldY)
     {
         ClearRenderers();
         SetTraceAlpha(1f);
 
-        phase = TracePhase.DrawingUpperOutbound;
+        phase = TracePhase.DrawingLeftOutbound;
         phaseTime = 0f;
         cycleEquilibriumWorldY = equilibriumWorldY;
         upperTurningWorldY = currentWeightWorldY;
         lowerTurningWorldY = equilibriumWorldY;
         lastReliableMovementDirection = MovingUp;
 
-        DrawUpperOutbound(currentWeightWorldY);
+        DrawLeftOutbound(currentWeightWorldY);
     }
 
-    private void StartUpperReturn(float currentWeightWorldY)
+    private void StartCenterDescent(float currentWeightWorldY)
     {
-        phase = TracePhase.DrawingUpperReturn;
-        DrawUpperReturn(currentWeightWorldY);
-    }
-
-    private void FinishUpperTrace(float equilibriumWorldY)
-    {
-        cycleEquilibriumWorldY = equilibriumWorldY;
-        DrawUpperReturn(equilibriumWorldY);
-    }
-
-    private void StartLowerOutbound(
-        float currentWeightWorldY,
-        float equilibriumWorldY)
-    {
-        ClearRenderer(lowerTraceRenderer);
-
-        phase = TracePhase.DrawingLowerOutbound;
-        cycleEquilibriumWorldY = equilibriumWorldY;
+        phase = TracePhase.DrawingCenterDescent;
         lowerTurningWorldY = currentWeightWorldY;
-        lastReliableMovementDirection = MovingDown;
-
-        DrawLowerOutbound(currentWeightWorldY);
+        DrawCenterDescent(currentWeightWorldY);
     }
 
-    private void StartLowerReturn(float currentWeightWorldY)
+    private void StartRightReturn(float currentWeightWorldY)
     {
-        phase = TracePhase.DrawingLowerReturn;
-        DrawLowerReturn(currentWeightWorldY);
+        phase = TracePhase.DrawingRightReturn;
+        DrawRightReturn(currentWeightWorldY);
     }
 
-    private void FinishLowerTrace(float equilibriumWorldY)
+    private void FinishContinuousTrace(float equilibriumWorldY)
     {
         cycleEquilibriumWorldY = equilibriumWorldY;
-        DrawLowerReturn(equilibriumWorldY);
+        DrawRightReturn(equilibriumWorldY);
+        ShowCompletedTraceSegments(equilibriumWorldY);
+
+        if (upperTraceRenderer != null)
+            upperTraceRenderer.enabled = false;
+
+        phase = TracePhase.Holding;
+        phaseTime = 0f;
     }
 
-    private void DrawUpperOutbound(float activeWorldY)
+    private void ShowCompletedTraceSegments(float equilibriumWorldY)
+    {
+        Vector3[] finalPoints =
+        {
+            GetLanePoint(-1, equilibriumWorldY),
+            GetLanePoint(-1, upperTurningWorldY),
+            GetLanePoint(0, upperTurningWorldY),
+            GetLanePoint(0, lowerTurningWorldY),
+            GetLanePoint(1, lowerTurningWorldY),
+            GetLanePoint(1, equilibriumWorldY)
+        };
+
+        for (int i = 0; i < FinalTraceSegmentCount; i++)
+        {
+            LineRenderer renderer =
+                finalTraceSegmentRenderers[i];
+
+            if (renderer == null)
+                continue;
+
+            renderer.positionCount = 2;
+            renderer.SetPosition(0, finalPoints[i]);
+            renderer.SetPosition(1, finalPoints[i + 1]);
+            renderer.enabled = true;
+        }
+    }
+
+    private void DrawLeftOutbound(float activeWorldY)
     {
         if (upperTraceRenderer == null)
             return;
@@ -293,14 +293,14 @@ public class PeriodTrace : MonoBehaviour
         upperTraceRenderer.positionCount = 2;
         upperTraceRenderer.SetPosition(
             0,
-            GetLanePoint(0, cycleEquilibriumWorldY));
+            GetLanePoint(-1, cycleEquilibriumWorldY));
         upperTraceRenderer.SetPosition(
             1,
-            GetLanePoint(0, activeWorldY));
+            GetLanePoint(-1, activeWorldY));
         upperTraceRenderer.enabled = true;
     }
 
-    private void DrawUpperReturn(float activeWorldY)
+    private void DrawCenterDescent(float activeWorldY)
     {
         if (upperTraceRenderer == null)
             return;
@@ -308,53 +308,44 @@ public class PeriodTrace : MonoBehaviour
         upperTraceRenderer.positionCount = 4;
         upperTraceRenderer.SetPosition(
             0,
-            GetLanePoint(0, cycleEquilibriumWorldY));
+            GetLanePoint(-1, cycleEquilibriumWorldY));
         upperTraceRenderer.SetPosition(
             1,
-            GetLanePoint(0, upperTurningWorldY));
-        upperTraceRenderer.SetPosition(
-            2,
             GetLanePoint(-1, upperTurningWorldY));
         upperTraceRenderer.SetPosition(
+            2,
+            GetLanePoint(0, upperTurningWorldY));
+        upperTraceRenderer.SetPosition(
             3,
-            GetLanePoint(-1, activeWorldY));
+            GetLanePoint(0, activeWorldY));
         upperTraceRenderer.enabled = true;
     }
 
-    private void DrawLowerOutbound(float activeWorldY)
+    private void DrawRightReturn(float activeWorldY)
     {
-        if (lowerTraceRenderer == null)
+        if (upperTraceRenderer == null)
             return;
 
-        lowerTraceRenderer.positionCount = 2;
-        lowerTraceRenderer.SetPosition(
+        upperTraceRenderer.positionCount = 6;
+        upperTraceRenderer.SetPosition(
             0,
-            GetLanePoint(0, cycleEquilibriumWorldY));
-        lowerTraceRenderer.SetPosition(
+            GetLanePoint(-1, cycleEquilibriumWorldY));
+        upperTraceRenderer.SetPosition(
             1,
-            GetLanePoint(0, activeWorldY));
-        lowerTraceRenderer.enabled = true;
-    }
-
-    private void DrawLowerReturn(float activeWorldY)
-    {
-        if (lowerTraceRenderer == null)
-            return;
-
-        lowerTraceRenderer.positionCount = 4;
-        lowerTraceRenderer.SetPosition(
-            0,
-            GetLanePoint(0, cycleEquilibriumWorldY));
-        lowerTraceRenderer.SetPosition(
-            1,
-            GetLanePoint(0, lowerTurningWorldY));
-        lowerTraceRenderer.SetPosition(
+            GetLanePoint(-1, upperTurningWorldY));
+        upperTraceRenderer.SetPosition(
             2,
-            GetLanePoint(1, lowerTurningWorldY));
-        lowerTraceRenderer.SetPosition(
+            GetLanePoint(0, upperTurningWorldY));
+        upperTraceRenderer.SetPosition(
             3,
+            GetLanePoint(0, lowerTurningWorldY));
+        upperTraceRenderer.SetPosition(
+            4,
+            GetLanePoint(1, lowerTurningWorldY));
+        upperTraceRenderer.SetPosition(
+            5,
             GetLanePoint(1, activeWorldY));
-        lowerTraceRenderer.enabled = true;
+        upperTraceRenderer.enabled = true;
     }
 
     private void UpdateCompletedTrace(float simulationDeltaTime)
@@ -453,15 +444,6 @@ public class PeriodTrace : MonoBehaviour
         return 0;
     }
 
-    private bool HasEnteredLowerHalf(
-        int crossingDirection,
-        float relativePosition)
-    {
-        return crossingDirection == MovingDown ||
-               GetEquilibriumSide(relativePosition) ==
-               BelowEquilibrium;
-    }
-
     private bool HasReturnedFromLowerHalf(
         int crossingDirection,
         float relativePosition)
@@ -540,42 +522,51 @@ public class PeriodTrace : MonoBehaviour
 
     private void InitializeRenderers()
     {
-        LineRenderer[] renderers = GetComponents<LineRenderer>();
-        upperTraceRenderer = renderers[0];
-        lowerTraceRenderer = GetOrCreateLowerTraceRenderer();
+        upperTraceRenderer = GetComponent<LineRenderer>();
 
         Material traceMaterial =
             upperTraceRenderer.sharedMaterial;
 
         ConfigureRenderer(upperTraceRenderer, traceMaterial);
-        ConfigureRenderer(lowerTraceRenderer, traceMaterial);
 
-        lowerTraceRenderer.sortingLayerID =
-            upperTraceRenderer.sortingLayerID;
-        lowerTraceRenderer.sortingOrder =
-            upperTraceRenderer.sortingOrder;
+        for (int i = 0; i < FinalTraceSegmentCount; i++)
+        {
+            LineRenderer renderer =
+                GetOrCreateFinalTraceSegmentRenderer(i);
+
+            finalTraceSegmentRenderers[i] = renderer;
+            ConfigureRenderer(renderer, traceMaterial);
+            renderer.numCornerVertices = 0;
+            renderer.sortingLayerID =
+                upperTraceRenderer.sortingLayerID;
+            renderer.sortingOrder =
+                upperTraceRenderer.sortingOrder;
+        }
     }
 
-    private LineRenderer GetOrCreateLowerTraceRenderer()
+    private LineRenderer GetOrCreateFinalTraceSegmentRenderer(
+        int segmentIndex)
     {
-        Transform lowerTraceTransform =
-            transform.Find(LowerTraceObjectName);
+        string segmentName =
+            FinalTraceSegmentNamePrefix + segmentIndex;
+        Transform segmentTransform =
+            transform.Find(segmentName);
 
-        if (lowerTraceTransform == null)
+        if (segmentTransform == null)
         {
-            GameObject lowerTraceObject =
-                new GameObject(LowerTraceObjectName);
-            lowerTraceObject.hideFlags = HideFlags.DontSave;
-            lowerTraceTransform = lowerTraceObject.transform;
-            lowerTraceTransform.SetParent(transform, false);
+            GameObject segmentObject =
+                new GameObject(segmentName);
+            segmentObject.hideFlags = HideFlags.DontSave;
+            segmentTransform = segmentObject.transform;
+            segmentTransform.SetParent(transform, false);
         }
 
         LineRenderer renderer =
-            lowerTraceTransform.GetComponent<LineRenderer>();
+            segmentTransform.GetComponent<LineRenderer>();
 
         return renderer != null
             ? renderer
-            : lowerTraceTransform.gameObject.AddComponent<LineRenderer>();
+            : segmentTransform.gameObject.AddComponent<LineRenderer>();
     }
 
     private void ConfigureRenderer(
@@ -587,9 +578,10 @@ public class PeriodTrace : MonoBehaviour
 
         renderer.positionCount = 0;
         renderer.useWorldSpace = true;
+        renderer.alignment = LineAlignment.View;
         renderer.startWidth = lineWidth;
         renderer.endWidth = lineWidth;
-        renderer.numCornerVertices = 0;
+        renderer.numCornerVertices = 4;
         renderer.numCapVertices = 2;
         renderer.shadowCastingMode = ShadowCastingMode.Off;
         renderer.receiveShadows = false;
@@ -613,14 +605,22 @@ public class PeriodTrace : MonoBehaviour
         if (upperTraceRenderer != null)
             upperTraceRenderer.colorGradient = traceGradient;
 
-        if (lowerTraceRenderer != null)
-            lowerTraceRenderer.colorGradient = traceGradient;
+        for (int i = 0; i < finalTraceSegmentRenderers.Length; i++)
+        {
+            if (finalTraceSegmentRenderers[i] != null)
+            {
+                finalTraceSegmentRenderers[i].colorGradient =
+                    traceGradient;
+            }
+        }
     }
 
     private void ClearRenderers()
     {
         ClearRenderer(upperTraceRenderer);
-        ClearRenderer(lowerTraceRenderer);
+
+        for (int i = 0; i < finalTraceSegmentRenderers.Length; i++)
+            ClearRenderer(finalTraceSegmentRenderers[i]);
     }
 
     private void ClearRenderer(LineRenderer renderer)
