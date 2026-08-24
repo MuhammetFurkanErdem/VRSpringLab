@@ -1,5 +1,6 @@
-using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
 [RequireComponent(typeof(LineRenderer))]
 public class PeriodTrace : MonoBehaviour
@@ -11,25 +12,32 @@ public class PeriodTrace : MonoBehaviour
     [SerializeField]
     private float horizontalOffset = -0.30f;
 
-    [Tooltip("Sol ve sağ dikey lane'in merkez çizgisine uzaklığı.")]
+    [Tooltip("LEFT/CENTER ve CENTER/RIGHT lane'leri arasındaki uzaklık.")]
+    [FormerlySerializedAs("laneHalfWidth")]
     [SerializeField]
-    private float laneHalfWidth = 0.04f;
+    private float laneWidth = 0.04f;
 
     [SerializeField]
     private float depthOffset = 0f;
 
-    [Header("Trace Sampling")]
-    [Tooltip("İki kalıcı örnek arasındaki simülasyon süresi.")]
+    [Header("Trace Detection")]
+    [Tooltip("Bu hızın altında yeni bir güvenilir hareket yönü üretilmez.")]
     [SerializeField]
-    private float sampleInterval = 0.025f;
+    private float velocityThreshold = 0.02f;
 
-    [Tooltip("Aynı lane üzerinde yeni history noktası için gereken Y hareketi.")]
+    [Tooltip("Equilibrium çevresindeki sign-change jitter dead zone'u.")]
     [SerializeField]
-    private float minVerticalDistance = 0.004f;
+    private float centerThreshold = 0.002f;
 
-    [Tooltip("Bir noktanın kaç simülasyon saniyesi boyunca izde kalacağı.")]
+    [Header("Trace Lifecycle")]
     [SerializeField]
-    private float traceLifetime = 3f;
+    private float completedHoldDuration = 0.4f;
+
+    [SerializeField]
+    private float fadeDuration = 0.7f;
+
+    [SerializeField]
+    private float gapDuration = 0.5f;
 
     [Header("Trace Appearance")]
     [SerializeField]
@@ -38,56 +46,51 @@ public class PeriodTrace : MonoBehaviour
     [SerializeField]
     private Color traceColor = Color.white;
 
-    private const int FadeKeyCount = 8;
+    private const int AboveEquilibrium = -1;
+    private const int BelowEquilibrium = 1;
     private const int MovingUp = -1;
     private const int MovingDown = 1;
+    private const string LowerTraceObjectName = "LowerTrace";
 
-    [Header("Turning Point Detection")]
-    [Tooltip("Bu hızın altındaki değerler yön değiştirme olarak kabul edilmez.")]
-    [SerializeField]
-    private float velocityThreshold = 0.02f;
+    private enum TracePhase
+    {
+        WaitingForStart,
+        DrawingUpperOutbound,
+        DrawingUpperReturn,
+        DrawingLowerOutbound,
+        DrawingLowerReturn,
+        Holding,
+        Fading,
+        Gap
+    }
 
-    private readonly List<TraceSample> samples =
-        new List<TraceSample>();
-
-    private readonly Gradient traceGradient =
-        new Gradient();
-
+    private readonly Gradient traceGradient = new Gradient();
     private readonly GradientColorKey[] colorKeys =
         new GradientColorKey[2];
-
     private readonly GradientAlphaKey[] alphaKeys =
-        new GradientAlphaKey[FadeKeyCount];
+        new GradientAlphaKey[2];
 
-    private LineRenderer traceRenderer;
+    private LineRenderer upperTraceRenderer;
+    private LineRenderer lowerTraceRenderer;
     private Rigidbody trackedWeight;
+    private TracePhase phase = TracePhase.WaitingForStart;
 
-    private float traceTime;
-    private float lastSampleTime;
-    private Vector3 lastSamplePosition;
-
+    private float phaseTime;
     private float traceBaseX;
     private float traceZ;
-    private int currentDirection;
-    private float directionExtremeY;
+    private float cycleEquilibriumWorldY;
+    private float upperTurningWorldY;
+    private float lowerTurningWorldY;
 
-    private struct TraceSample
-    {
-        public Vector3 Position;
-        public float Time;
-
-        public TraceSample(Vector3 position, float time)
-        {
-            Position = position;
-            Time = time;
-        }
-    }
+    private float previousRelativePosition;
+    private bool hasPreviousRelativePosition;
+    private int stableEquilibriumSide;
+    private int lastReliableMovementDirection;
 
     private void Awake()
     {
-        traceRenderer = GetComponent<LineRenderer>();
-        ConfigureRenderer();
-        ClearTrace();
+        InitializeRenderers();
+        ResetTraceState();
     }
 
     private void LateUpdate()
@@ -96,10 +99,10 @@ public class PeriodTrace : MonoBehaviour
             !springSimulation.HasWeight ||
             springSimulation.CurrentWeight == null)
         {
-            if (trackedWeight != null)
+            if (trackedWeight != null ||
+                phase != TracePhase.WaitingForStart)
             {
-                trackedWeight = null;
-                ClearTrace();
+                ResetTraceState();
             }
 
             return;
@@ -110,67 +113,400 @@ public class PeriodTrace : MonoBehaviour
         if (trackedWeight != weight)
             BeginTracking(weight);
 
-        // Pause sırasında sampling, aktif uç ve lifetime tamamen donar.
+        // Pause geometry'yi, aktif uçları ve lifecycle timer'larını dondurur.
         if (springSimulation.IsPaused)
             return;
 
-        float simulationDeltaTime =
-            GetSimulationFrameDeltaTime();
+        float simulationDeltaTime = GetSimulationFrameDeltaTime();
 
         if (simulationDeltaTime <= 0f)
             return;
 
-        traceTime += simulationDeltaTime;
+        float relativePosition =
+            springSimulation.DisplacementMeters -
+            springSimulation.EquilibriumDisplacementMeters;
 
-        RemoveExpiredSamples();
-        UpdateDirectionExtreme(weight.position.y);
+        int crossingDirection = DetectEquilibriumCrossing(
+            previousRelativePosition,
+            relativePosition);
 
-        int detectedDirection = GetMotionDirection();
-        bool directionChanged =
-            detectedDirection != 0 &&
-            detectedDirection != currentDirection;
+        int newReliableDirection =
+            UpdateReliableMovementDirection();
 
-        if (directionChanged)
+        float equilibriumWorldY =
+            GetEquilibriumWorldY(weight, relativePosition);
+
+        switch (phase)
         {
-            AddTurningPointBridge(
-                directionExtremeY,
-                currentDirection,
-                detectedDirection);
+            case TracePhase.WaitingForStart:
+                if (crossingDirection == MovingUp)
+                {
+                    StartUpperCycle(
+                        weight.position.y,
+                        equilibriumWorldY);
+                }
 
-            currentDirection = detectedDirection;
-            directionExtremeY = weight.position.y;
+                break;
+
+            case TracePhase.DrawingUpperOutbound:
+                upperTurningWorldY = Mathf.Max(
+                    upperTurningWorldY,
+                    weight.position.y);
+
+                DrawUpperOutbound(weight.position.y);
+
+                if (newReliableDirection == MovingDown)
+                    StartUpperReturn(weight.position.y);
+
+                break;
+
+            case TracePhase.DrawingUpperReturn:
+                DrawUpperReturn(weight.position.y);
+
+                if (HasEnteredLowerHalf(
+                    crossingDirection,
+                    relativePosition))
+                {
+                    FinishUpperTrace(equilibriumWorldY);
+                    StartLowerOutbound(
+                        weight.position.y,
+                        equilibriumWorldY);
+                }
+
+                break;
+
+            case TracePhase.DrawingLowerOutbound:
+                lowerTurningWorldY = Mathf.Min(
+                    lowerTurningWorldY,
+                    weight.position.y);
+
+                DrawLowerOutbound(weight.position.y);
+
+                if (newReliableDirection == MovingUp)
+                    StartLowerReturn(weight.position.y);
+
+                break;
+
+            case TracePhase.DrawingLowerReturn:
+                DrawLowerReturn(weight.position.y);
+
+                if (HasReturnedFromLowerHalf(
+                    crossingDirection,
+                    relativePosition))
+                {
+                    FinishLowerTrace(equilibriumWorldY);
+                    phase = TracePhase.Holding;
+                    phaseTime = 0f;
+                }
+
+                break;
+
+            case TracePhase.Holding:
+            case TracePhase.Fading:
+            case TracePhase.Gap:
+                UpdateCompletedTrace(simulationDeltaTime);
+                break;
         }
 
-        Vector3 currentPoint = GetLanePoint(
-            currentDirection,
-            weight.position.y);
-
-        if (!directionChanged && ShouldAddSample(currentPoint))
-            AddSample(currentPoint);
-
-        DrawTrace(currentPoint);
+        previousRelativePosition = relativePosition;
+        hasPreviousRelativePosition = true;
     }
 
     private void BeginTracking(Rigidbody weight)
     {
-        ClearTrace();
+        ResetTraceState();
 
         trackedWeight = weight;
         traceBaseX = weight.position.x + horizontalOffset;
         traceZ = weight.position.z + depthOffset;
 
-        int detectedDirection = GetMotionDirection();
-        currentDirection = detectedDirection != 0
-            ? detectedDirection
-            : MovingDown;
-        directionExtremeY = weight.position.y;
+        previousRelativePosition =
+            springSimulation.DisplacementMeters -
+            springSimulation.EquilibriumDisplacementMeters;
+        hasPreviousRelativePosition = true;
+        stableEquilibriumSide =
+            GetEquilibriumSide(previousRelativePosition);
+        lastReliableMovementDirection =
+            GetReliableMovementDirection();
+    }
 
-        Vector3 firstPoint = GetLanePoint(
-            currentDirection,
-            weight.position.y);
+    private void StartUpperCycle(
+        float currentWeightWorldY,
+        float equilibriumWorldY)
+    {
+        ClearRenderers();
+        SetTraceAlpha(1f);
 
-        AddSample(firstPoint);
-        DrawTrace(firstPoint);
+        phase = TracePhase.DrawingUpperOutbound;
+        phaseTime = 0f;
+        cycleEquilibriumWorldY = equilibriumWorldY;
+        upperTurningWorldY = currentWeightWorldY;
+        lowerTurningWorldY = equilibriumWorldY;
+        lastReliableMovementDirection = MovingUp;
+
+        DrawUpperOutbound(currentWeightWorldY);
+    }
+
+    private void StartUpperReturn(float currentWeightWorldY)
+    {
+        phase = TracePhase.DrawingUpperReturn;
+        DrawUpperReturn(currentWeightWorldY);
+    }
+
+    private void FinishUpperTrace(float equilibriumWorldY)
+    {
+        cycleEquilibriumWorldY = equilibriumWorldY;
+        DrawUpperReturn(equilibriumWorldY);
+    }
+
+    private void StartLowerOutbound(
+        float currentWeightWorldY,
+        float equilibriumWorldY)
+    {
+        ClearRenderer(lowerTraceRenderer);
+
+        phase = TracePhase.DrawingLowerOutbound;
+        cycleEquilibriumWorldY = equilibriumWorldY;
+        lowerTurningWorldY = currentWeightWorldY;
+        lastReliableMovementDirection = MovingDown;
+
+        DrawLowerOutbound(currentWeightWorldY);
+    }
+
+    private void StartLowerReturn(float currentWeightWorldY)
+    {
+        phase = TracePhase.DrawingLowerReturn;
+        DrawLowerReturn(currentWeightWorldY);
+    }
+
+    private void FinishLowerTrace(float equilibriumWorldY)
+    {
+        cycleEquilibriumWorldY = equilibriumWorldY;
+        DrawLowerReturn(equilibriumWorldY);
+    }
+
+    private void DrawUpperOutbound(float activeWorldY)
+    {
+        if (upperTraceRenderer == null)
+            return;
+
+        upperTraceRenderer.positionCount = 2;
+        upperTraceRenderer.SetPosition(
+            0,
+            GetLanePoint(0, cycleEquilibriumWorldY));
+        upperTraceRenderer.SetPosition(
+            1,
+            GetLanePoint(0, activeWorldY));
+        upperTraceRenderer.enabled = true;
+    }
+
+    private void DrawUpperReturn(float activeWorldY)
+    {
+        if (upperTraceRenderer == null)
+            return;
+
+        upperTraceRenderer.positionCount = 4;
+        upperTraceRenderer.SetPosition(
+            0,
+            GetLanePoint(0, cycleEquilibriumWorldY));
+        upperTraceRenderer.SetPosition(
+            1,
+            GetLanePoint(0, upperTurningWorldY));
+        upperTraceRenderer.SetPosition(
+            2,
+            GetLanePoint(-1, upperTurningWorldY));
+        upperTraceRenderer.SetPosition(
+            3,
+            GetLanePoint(-1, activeWorldY));
+        upperTraceRenderer.enabled = true;
+    }
+
+    private void DrawLowerOutbound(float activeWorldY)
+    {
+        if (lowerTraceRenderer == null)
+            return;
+
+        lowerTraceRenderer.positionCount = 2;
+        lowerTraceRenderer.SetPosition(
+            0,
+            GetLanePoint(0, cycleEquilibriumWorldY));
+        lowerTraceRenderer.SetPosition(
+            1,
+            GetLanePoint(0, activeWorldY));
+        lowerTraceRenderer.enabled = true;
+    }
+
+    private void DrawLowerReturn(float activeWorldY)
+    {
+        if (lowerTraceRenderer == null)
+            return;
+
+        lowerTraceRenderer.positionCount = 4;
+        lowerTraceRenderer.SetPosition(
+            0,
+            GetLanePoint(0, cycleEquilibriumWorldY));
+        lowerTraceRenderer.SetPosition(
+            1,
+            GetLanePoint(0, lowerTurningWorldY));
+        lowerTraceRenderer.SetPosition(
+            2,
+            GetLanePoint(1, lowerTurningWorldY));
+        lowerTraceRenderer.SetPosition(
+            3,
+            GetLanePoint(1, activeWorldY));
+        lowerTraceRenderer.enabled = true;
+    }
+
+    private void UpdateCompletedTrace(float simulationDeltaTime)
+    {
+        phaseTime += simulationDeltaTime;
+
+        if (phase == TracePhase.Holding)
+        {
+            float hold = Mathf.Max(completedHoldDuration, 0f);
+
+            if (phaseTime < hold)
+                return;
+
+            phaseTime -= hold;
+            phase = TracePhase.Fading;
+        }
+
+        if (phase == TracePhase.Fading)
+        {
+            float duration = Mathf.Max(fadeDuration, 0.0001f);
+            float progress = Mathf.Clamp01(phaseTime / duration);
+
+            SetTraceAlpha(
+                1f - Mathf.SmoothStep(0f, 1f, progress));
+
+            if (phaseTime < duration)
+                return;
+
+            ClearRenderers();
+            phaseTime -= duration;
+            phase = TracePhase.Gap;
+        }
+
+        if (phase == TracePhase.Gap)
+        {
+            float gap = Mathf.Max(gapDuration, 0f);
+
+            if (phaseTime < gap)
+                return;
+
+            phase = TracePhase.WaitingForStart;
+            phaseTime = 0f;
+            upperTurningWorldY = 0f;
+            lowerTurningWorldY = 0f;
+            SetTraceAlpha(1f);
+        }
+    }
+
+    private int DetectEquilibriumCrossing(
+        float previousRelative,
+        float currentRelative)
+    {
+        if (!hasPreviousRelativePosition)
+            return 0;
+
+        if (stableEquilibriumSide == 0)
+        {
+            stableEquilibriumSide =
+                GetEquilibriumSide(previousRelative);
+        }
+
+        int currentSide =
+            GetEquilibriumSide(currentRelative);
+
+        if (currentSide == 0)
+            return 0;
+
+        int previousSide = stableEquilibriumSide;
+        stableEquilibriumSide = currentSide;
+
+        if (previousSide == BelowEquilibrium &&
+            currentSide == AboveEquilibrium)
+        {
+            return MovingUp;
+        }
+
+        if (previousSide == AboveEquilibrium &&
+            currentSide == BelowEquilibrium)
+        {
+            return MovingDown;
+        }
+
+        return 0;
+    }
+
+    private int GetEquilibriumSide(float relativePosition)
+    {
+        float threshold = Mathf.Max(centerThreshold, 0f);
+
+        if (relativePosition < -threshold)
+            return AboveEquilibrium;
+
+        if (relativePosition > threshold)
+            return BelowEquilibrium;
+
+        return 0;
+    }
+
+    private bool HasEnteredLowerHalf(
+        int crossingDirection,
+        float relativePosition)
+    {
+        return crossingDirection == MovingDown ||
+               GetEquilibriumSide(relativePosition) ==
+               BelowEquilibrium;
+    }
+
+    private bool HasReturnedFromLowerHalf(
+        int crossingDirection,
+        float relativePosition)
+    {
+        return crossingDirection == MovingUp ||
+               GetEquilibriumSide(relativePosition) ==
+               AboveEquilibrium;
+    }
+
+    private int UpdateReliableMovementDirection()
+    {
+        int currentDirection =
+            GetReliableMovementDirection();
+
+        if (currentDirection == 0)
+            return 0;
+
+        if (lastReliableMovementDirection == 0)
+        {
+            lastReliableMovementDirection = currentDirection;
+            return 0;
+        }
+
+        if (currentDirection == lastReliableMovementDirection)
+            return 0;
+
+        lastReliableMovementDirection = currentDirection;
+        return currentDirection;
+    }
+
+    private int GetReliableMovementDirection()
+    {
+        float velocity =
+            springSimulation.VelocityMetersPerSecond;
+        float threshold =
+            Mathf.Max(velocityThreshold, 0.0001f);
+
+        // SpringSimulation displacement/velocity değerleri aşağı pozitif.
+        if (velocity > threshold)
+            return MovingDown;
+
+        if (velocity < -threshold)
+            return MovingUp;
+
+        return 0;
     }
 
     private float GetSimulationFrameDeltaTime()
@@ -185,216 +521,138 @@ public class PeriodTrace : MonoBehaviour
         return Time.deltaTime * simulationScale;
     }
 
-    private Vector3 GetLanePoint(int direction, float worldY)
+    private float GetEquilibriumWorldY(
+        Rigidbody weight,
+        float relativePosition)
     {
-        float laneOffset = Mathf.Abs(laneHalfWidth);
-
-        float laneX = direction == MovingUp
-            ? traceBaseX - laneOffset
-            : traceBaseX + laneOffset;
-
-        return new Vector3(
-            laneX,
-            worldY,
-            traceZ);
+        // worldY = restY - displacement olduğundan:
+        // equilibriumY = currentWeightY + displacement - equilibrium.
+        return weight.position.y + relativePosition;
     }
 
-    private void AddTurningPointBridge(
-        float worldY,
-        int previousDirection,
-        int nextDirection)
+    private Vector3 GetLanePoint(int lane, float worldY)
     {
-        // Aynı gerçek Y'de iki vertex: eski lane'in sonu ve yeni lane'in
-        // başlangıcı. LineRenderer bunların arasını kısa yatay çizgi yapar.
-        AddSample(GetLanePoint(previousDirection, worldY));
-        AddSample(GetLanePoint(nextDirection, worldY));
+        float laneOffset = Mathf.Abs(laneWidth);
+        float laneX = traceBaseX + lane * laneOffset;
+
+        return new Vector3(laneX, worldY, traceZ);
     }
 
-    private void UpdateDirectionExtreme(float worldY)
+    private void InitializeRenderers()
     {
-        if (currentDirection == MovingDown)
-            directionExtremeY = Mathf.Min(directionExtremeY, worldY);
-        else if (currentDirection == MovingUp)
-            directionExtremeY = Mathf.Max(directionExtremeY, worldY);
+        LineRenderer[] renderers = GetComponents<LineRenderer>();
+        upperTraceRenderer = renderers[0];
+        lowerTraceRenderer = GetOrCreateLowerTraceRenderer();
+
+        Material traceMaterial =
+            upperTraceRenderer.sharedMaterial;
+
+        ConfigureRenderer(upperTraceRenderer, traceMaterial);
+        ConfigureRenderer(lowerTraceRenderer, traceMaterial);
+
+        lowerTraceRenderer.sortingLayerID =
+            upperTraceRenderer.sortingLayerID;
+        lowerTraceRenderer.sortingOrder =
+            upperTraceRenderer.sortingOrder;
     }
 
-    private bool ShouldAddSample(Vector3 currentPoint)
+    private LineRenderer GetOrCreateLowerTraceRenderer()
     {
-        if (samples.Count == 0)
-            return true;
+        Transform lowerTraceTransform =
+            transform.Find(LowerTraceObjectName);
 
-        float interval = Mathf.Max(sampleInterval, 0.005f);
-        float elapsed = traceTime - lastSampleTime;
-
-        if (elapsed < interval)
-            return false;
-
-        float verticalDistance =
-            Mathf.Abs(currentPoint.y - lastSamplePosition.y);
-
-        return verticalDistance >=
-               Mathf.Max(minVerticalDistance, 0f);
-    }
-
-    private void AddSample(Vector3 position)
-    {
-        samples.Add(new TraceSample(position, traceTime));
-
-        lastSamplePosition = position;
-        lastSampleTime = traceTime;
-    }
-
-    private void RemoveExpiredSamples()
-    {
-        float lifetime = Mathf.Max(traceLifetime, 0.05f);
-        int expiredCount = 0;
-
-        while (expiredCount < samples.Count &&
-               traceTime - samples[expiredCount].Time >= lifetime)
+        if (lowerTraceTransform == null)
         {
-            expiredCount++;
+            GameObject lowerTraceObject =
+                new GameObject(LowerTraceObjectName);
+            lowerTraceObject.hideFlags = HideFlags.DontSave;
+            lowerTraceTransform = lowerTraceObject.transform;
+            lowerTraceTransform.SetParent(transform, false);
         }
 
-        if (expiredCount > 0)
-            samples.RemoveRange(0, expiredCount);
+        LineRenderer renderer =
+            lowerTraceTransform.GetComponent<LineRenderer>();
+
+        return renderer != null
+            ? renderer
+            : lowerTraceTransform.gameObject.AddComponent<LineRenderer>();
     }
 
-    private void DrawTrace(Vector3 activeTip)
+    private void ConfigureRenderer(
+        LineRenderer renderer,
+        Material traceMaterial)
     {
-        if (traceRenderer == null)
+        if (renderer == null)
             return;
 
-        int pointCount = samples.Count + 1;
-        traceRenderer.positionCount = pointCount;
-
-        for (int i = 0; i < samples.Count; i++)
-            traceRenderer.SetPosition(i, samples[i].Position);
-
-        // Kalıcı sample aralığından bağımsız olarak aktif uç her frame
-        // gerçek Rigidbody world Y konumuna gider.
-        traceRenderer.SetPosition(pointCount - 1, activeTip);
-
-        UpdateFadeGradient(pointCount);
-        traceRenderer.enabled = pointCount >= 2;
+        renderer.positionCount = 0;
+        renderer.useWorldSpace = true;
+        renderer.startWidth = lineWidth;
+        renderer.endWidth = lineWidth;
+        renderer.numCornerVertices = 0;
+        renderer.numCapVertices = 2;
+        renderer.shadowCastingMode = ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+        renderer.sharedMaterial = traceMaterial;
+        renderer.enabled = false;
     }
 
-    private void UpdateFadeGradient(int pointCount)
+    private void SetTraceAlpha(float normalizedAlpha)
     {
-        Color gradientColor = traceColor;
-        gradientColor.a = 1f;
+        Color color = traceColor;
+        float alpha =
+            traceColor.a * Mathf.Clamp01(normalizedAlpha);
 
-        colorKeys[0] =
-            new GradientColorKey(gradientColor, 0f);
-
-        colorKeys[1] =
-            new GradientColorKey(gradientColor, 1f);
-
-        float lifetime = Mathf.Max(traceLifetime, 0.05f);
-
-        for (int i = 0; i < FadeKeyCount; i++)
-        {
-            float normalizedPosition =
-                i / (FadeKeyCount - 1f);
-
-            float pointTime = GetTimeAtPosition(
-                normalizedPosition,
-                pointCount);
-
-            float remainingLifetime = Mathf.Clamp01(
-                1f - (traceTime - pointTime) / lifetime);
-
-            float alpha =
-                Mathf.SmoothStep(0f, 1f, remainingLifetime) *
-                traceColor.a;
-
-            // Aktif uç her zaman tam görünürdür.
-            if (i == FadeKeyCount - 1)
-                alpha = traceColor.a;
-
-            alphaKeys[i] =
-                new GradientAlphaKey(alpha, normalizedPosition);
-        }
+        colorKeys[0] = new GradientColorKey(color, 0f);
+        colorKeys[1] = new GradientColorKey(color, 1f);
+        alphaKeys[0] = new GradientAlphaKey(alpha, 0f);
+        alphaKeys[1] = new GradientAlphaKey(alpha, 1f);
 
         traceGradient.SetKeys(colorKeys, alphaKeys);
-        traceRenderer.colorGradient = traceGradient;
+
+        if (upperTraceRenderer != null)
+            upperTraceRenderer.colorGradient = traceGradient;
+
+        if (lowerTraceRenderer != null)
+            lowerTraceRenderer.colorGradient = traceGradient;
     }
 
-    private float GetTimeAtPosition(
-        float normalizedPosition,
-        int pointCount)
+    private void ClearRenderers()
     {
-        if (pointCount <= 1)
-            return traceTime;
-
-        float exactIndex =
-            normalizedPosition * (pointCount - 1);
-
-        int lowerIndex = Mathf.FloorToInt(exactIndex);
-        int upperIndex = Mathf.Min(lowerIndex + 1, pointCount - 1);
-        float interpolation = exactIndex - lowerIndex;
-
-        return Mathf.Lerp(
-            GetPointTime(lowerIndex),
-            GetPointTime(upperIndex),
-            interpolation);
+        ClearRenderer(upperTraceRenderer);
+        ClearRenderer(lowerTraceRenderer);
     }
 
-    private float GetPointTime(int index)
+    private void ClearRenderer(LineRenderer renderer)
     {
-        return index >= samples.Count
-            ? traceTime
-            : samples[index].Time;
+        if (renderer == null)
+            return;
+
+        renderer.positionCount = 0;
+        renderer.enabled = false;
     }
 
-    private int GetMotionDirection()
+    private void ResetTraceState()
     {
-        float velocity =
-            springSimulation.VelocityMetersPerSecond;
+        trackedWeight = null;
+        phase = TracePhase.WaitingForStart;
+        phaseTime = 0f;
+        traceBaseX = 0f;
+        traceZ = 0f;
+        cycleEquilibriumWorldY = 0f;
+        upperTurningWorldY = 0f;
+        lowerTurningWorldY = 0f;
+        previousRelativePosition = 0f;
+        hasPreviousRelativePosition = false;
+        stableEquilibriumSide = 0;
+        lastReliableMovementDirection = 0;
 
-        float threshold =
-            Mathf.Max(velocityThreshold, 0.0001f);
-
-        // SpringSimulation displacement'i aşağı yönde pozitif tutuyor.
-        if (velocity > threshold)
-            return MovingDown;
-
-        if (velocity < -threshold)
-            return MovingUp;
-
-        return 0;
-    }
-
-    private void ConfigureRenderer()
-    {
-        traceRenderer.positionCount = 0;
-        traceRenderer.useWorldSpace = true;
-        traceRenderer.startWidth = lineWidth;
-        traceRenderer.endWidth = lineWidth;
-        traceRenderer.numCornerVertices = 0;
-        traceRenderer.numCapVertices = 2;
-        traceRenderer.enabled = false;
-    }
-
-    private void ClearTrace()
-    {
-        samples.Clear();
-
-        traceTime = 0f;
-        lastSampleTime = 0f;
-        lastSamplePosition = Vector3.zero;
-        currentDirection = 0;
-        directionExtremeY = 0f;
-
-        if (traceRenderer != null)
-        {
-            traceRenderer.positionCount = 0;
-            traceRenderer.enabled = false;
-        }
+        ClearRenderers();
+        SetTraceAlpha(1f);
     }
 
     private void OnDisable()
     {
-        trackedWeight = null;
-        ClearTrace();
+        ResetTraceState();
     }
 }
