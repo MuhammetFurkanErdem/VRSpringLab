@@ -2,7 +2,7 @@ using UnityEngine;
 using TMPro;
 using Oculus.Interaction;
 
-public class PhysicalPlanetSelector : MonoBehaviour
+public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
 {
     [Header("References")]
     [SerializeField] private Transform leverPivot;
@@ -22,8 +22,20 @@ public class PhysicalPlanetSelector : MonoBehaviour
     [Header("Snap")]
     [SerializeField] private float snapSpeed = 180f;
 
+    [Header("Grab Rotation")]
+    [Tooltip("Controller'in yatay world hareketini local Y acisina cevirir.")]
+    [SerializeField] private float horizontalDegreesPerMeter = 300f;
+
+    [Tooltip("Controller'in dikey world hareketini local X acisina cevirir.")]
+    [SerializeField] private float verticalDegreesPerMeter = 500f;
+
     private Vector3 lockedLocalPosition;
     private Vector3 lockedLocalScale;
+
+    private IGrabbable activeGrabbable;
+    private Vector3 grabStartWorldPosition;
+    private float grabStartLocalX;
+    private float grabStartLocalY;
 
     private bool isGrabbed;
     private bool isSnapping;
@@ -37,6 +49,9 @@ public class PhysicalPlanetSelector : MonoBehaviour
             lockedLocalPosition = leverPivot.localPosition;
             lockedLocalScale = leverPivot.localScale;
         }
+
+        if (grabbable != null)
+            grabbable.InjectOptionalOneGrabTransformer(this);
     }
 
     private void Start()
@@ -81,8 +96,7 @@ public class PhysicalPlanetSelector : MonoBehaviour
         if (leverPivot == null)
             return;
 
-        // OneGrabFreeTransformer objeyi taşımaya çalışsa bile
-        // joystick mafsalı yerinden kopmasın.
+        // Grab sırasında joystick mafsalı yerinden kopmasın.
         leverPivot.localPosition = lockedLocalPosition;
         leverPivot.localScale = lockedLocalScale;
 
@@ -103,6 +117,80 @@ public class PhysicalPlanetSelector : MonoBehaviour
             leverPivot.localRotation = targetRotation;
             isSnapping = false;
         }
+    }
+
+    public void Initialize(IGrabbable initializedGrabbable)
+    {
+        activeGrabbable = initializedGrabbable;
+    }
+
+    public void BeginTransform()
+    {
+        if (leverPivot == null ||
+            activeGrabbable == null ||
+            activeGrabbable.GrabPoints.Count == 0)
+        {
+            return;
+        }
+
+        grabStartWorldPosition =
+            activeGrabbable.GrabPoints[0].position;
+
+        Vector3 currentEuler =
+            leverPivot.localRotation.eulerAngles;
+
+        grabStartLocalX =
+            Mathf.DeltaAngle(0f, currentEuler.x);
+        grabStartLocalY =
+            Mathf.DeltaAngle(0f, currentEuler.y);
+    }
+
+    public void UpdateTransform()
+    {
+        if (leverPivot == null ||
+            activeGrabbable == null ||
+            activeGrabbable.GrabPoints.Count == 0)
+        {
+            return;
+        }
+
+        Vector3 worldDelta =
+            activeGrabbable.GrabPoints[0].position -
+            grabStartWorldPosition;
+
+        float minimumLocalX = Mathf.Min(
+            earthRotation.x,
+            Mathf.Min(marsRotation.x, moonRotation.x));
+        float maximumLocalX = Mathf.Max(
+            earthRotation.x,
+            Mathf.Max(marsRotation.x, moonRotation.x));
+        float minimumLocalY = Mathf.Min(
+            earthRotation.y,
+            Mathf.Min(marsRotation.y, moonRotation.y));
+        float maximumLocalY = Mathf.Max(
+            earthRotation.y,
+            Mathf.Max(marsRotation.y, moonRotation.y));
+
+        float localX = Mathf.Clamp(
+            grabStartLocalX +
+            -worldDelta.y * verticalDegreesPerMeter,
+            minimumLocalX,
+            maximumLocalX);
+
+        float localY = Mathf.Clamp(
+            grabStartLocalY +
+            -worldDelta.x * horizontalDegreesPerMeter,
+            minimumLocalY,
+            maximumLocalY);
+
+        leverPivot.localPosition = lockedLocalPosition;
+        leverPivot.localScale = lockedLocalScale;
+        leverPivot.localRotation =
+            Quaternion.Euler(localX, localY, 0f);
+    }
+
+    public void EndTransform()
+    {
     }
 
     private void HandlePointerEvent(PointerEvent evt)
