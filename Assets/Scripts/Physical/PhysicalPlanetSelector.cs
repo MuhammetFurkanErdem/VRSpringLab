@@ -1,5 +1,4 @@
 using UnityEngine;
-using TMPro;
 using Oculus.Interaction;
 
 public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
@@ -7,43 +6,38 @@ public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
     [Header("References")]
     [SerializeField] private Transform leverPivot;
     [SerializeField] private Grabbable grabbable;
-    [SerializeField] private TMP_Dropdown planetDropdown;
+    [SerializeField] private SpringSimulation springSimulation;
 
     [Header("Target Local Rotations")]
     [SerializeField] private Vector3 earthRotation;
     [SerializeField] private Vector3 marsRotation;
     [SerializeField] private Vector3 moonRotation;
 
-    [Header("Dropdown Indices")]
-    [SerializeField] private int earthDropdownIndex = 0;
-    [SerializeField] private int marsDropdownIndex = 1;
-    [SerializeField] private int moonDropdownIndex = 2;
-
     [Header("Snap")]
     [SerializeField] private float snapSpeed = 180f;
-
-    [Header("Grab Rotation")]
-    [Tooltip("Controller'in yatay world hareketini local Y acisina cevirir.")]
-    [SerializeField] private float horizontalDegreesPerMeter = 300f;
-
-    [Tooltip("Controller'in dikey world hareketini local X acisina cevirir.")]
-    [SerializeField] private float verticalDegreesPerMeter = 500f;
 
     private Vector3 lockedLocalPosition;
     private Vector3 lockedLocalScale;
 
     private IGrabbable activeGrabbable;
-    private Vector3 grabStartWorldPosition;
-    private float grabStartLocalX;
-    private float grabStartLocalY;
+    private Vector3 grabStartDirectionInParentSpace;
+    private Vector3 leverStartDirectionInParentSpace;
+    private bool hasValidGrabDirection;
 
-    private bool isGrabbed;
     private bool isSnapping;
+    private bool snapWhenReleased;
 
     private Quaternion targetRotation;
+    private int selectedPresetIndex;
+
+    private const int EarthPresetIndex = 0;
+    private const int MoonPresetIndex = 1;
+    private const int MarsPresetIndex = 2;
 
     private void Awake()
     {
+        ResolveSpringSimulation();
+
         if (leverPivot != null)
         {
             lockedLocalPosition = leverPivot.localPosition;
@@ -51,28 +45,21 @@ public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
         }
 
         if (grabbable != null)
+        {
+            // Bu mekanik kontrol yalnızca tek elle sürülür. İkinci bir seçim
+            // noktası, TwoGrabTransformer olmadığı için hareketi durdurmamalı.
+            grabbable.MaxGrabPoints = 1;
             grabbable.InjectOptionalOneGrabTransformer(this);
+        }
     }
 
     private void Start()
     {
-        // Mevcut dropdown hangi gezegendeyse
-        // joystick de o konumdan başlasın.
-        if (planetDropdown == null || leverPivot == null)
+        if (leverPivot == null)
             return;
 
-        if (planetDropdown.value == marsDropdownIndex)
-        {
-            SetImmediateRotation(marsRotation);
-        }
-        else if (planetDropdown.value == moonDropdownIndex)
-        {
-            SetImmediateRotation(moonRotation);
-        }
-        else
-        {
-            SetImmediateRotation(earthRotation);
-        }
+        selectedPresetIndex = GetSimulationPresetIndex();
+        SetImmediateRotation(GetRotationForPreset(selectedPresetIndex));
     }
 
     private void OnEnable()
@@ -100,7 +87,33 @@ public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
         leverPivot.localPosition = lockedLocalPosition;
         leverPivot.localScale = lockedLocalScale;
 
-        if (isGrabbed || !isSnapping)
+        bool grabActive =
+            grabbable != null &&
+            grabbable.GrabPoints.Count > 0;
+
+        if (grabActive)
+        {
+            isSnapping = false;
+            return;
+        }
+
+        if (snapWhenReleased)
+        {
+            snapWhenReleased = false;
+            SnapToNearestPlanet();
+        }
+
+        // ResetSimulation veya başka bir fiziksel sistem gravity preset'ini
+        // değiştirdiğinde joystick SpringSimulation state'ini takip eder.
+        int simulationPresetIndex = GetSimulationPresetIndex();
+
+        if (simulationPresetIndex != selectedPresetIndex)
+        {
+            selectedPresetIndex = simulationPresetIndex;
+            StartSnap(GetRotationForPreset(selectedPresetIndex));
+        }
+
+        if (!isSnapping)
             return;
 
         leverPivot.localRotation =
@@ -133,16 +146,25 @@ public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
             return;
         }
 
-        grabStartWorldPosition =
-            activeGrabbable.GrabPoints[0].position;
+        Vector3 grabOffset =
+            activeGrabbable.GrabPoints[0].position -
+            leverPivot.position;
 
-        Vector3 currentEuler =
-            leverPivot.localRotation.eulerAngles;
+        hasValidGrabDirection =
+            grabOffset.sqrMagnitude > 0.000001f;
 
-        grabStartLocalX =
-            Mathf.DeltaAngle(0f, currentEuler.x);
-        grabStartLocalY =
-            Mathf.DeltaAngle(0f, currentEuler.y);
+        if (!hasValidGrabDirection)
+            return;
+
+        grabStartDirectionInParentSpace =
+            WorldDirectionToParentSpace(grabOffset).normalized;
+
+        // Joystick mesh'i LeverPivot'in local +Z ekseni boyunca uzanıyor.
+        // Başlangıç yönünü saklayıp controller'ın pivot çevresindeki gerçek
+        // açısal hareketini buna uygularız. Böylece eğik panelde world X/Y
+        // eksenlerine bağlı yapay dead-zone ve ters geçişler oluşmaz.
+        leverStartDirectionInParentSpace =
+            leverPivot.localRotation * Vector3.forward;
     }
 
     public void UpdateTransform()
@@ -154,9 +176,26 @@ public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
             return;
         }
 
-        Vector3 worldDelta =
+        if (!hasValidGrabDirection)
+            return;
+
+        Vector3 currentGrabOffset =
             activeGrabbable.GrabPoints[0].position -
-            grabStartWorldPosition;
+            leverPivot.position;
+
+        if (currentGrabOffset.sqrMagnitude <= 0.000001f)
+            return;
+
+        Vector3 currentGrabDirectionInParentSpace =
+            WorldDirectionToParentSpace(currentGrabOffset).normalized;
+
+        Quaternion grabSwing = Quaternion.FromToRotation(
+            grabStartDirectionInParentSpace,
+            currentGrabDirectionInParentSpace
+        );
+
+        Vector3 desiredLeverDirection =
+            (grabSwing * leverStartDirectionInParentSpace).normalized;
 
         float minimumLocalX = Mathf.Min(
             earthRotation.x,
@@ -171,15 +210,24 @@ public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
             earthRotation.y,
             Mathf.Max(marsRotation.y, moonRotation.y));
 
+        float horizontalLength = Mathf.Sqrt(
+            desiredLeverDirection.x * desiredLeverDirection.x +
+            desiredLeverDirection.z * desiredLeverDirection.z
+        );
+
         float localX = Mathf.Clamp(
-            grabStartLocalX +
-            -worldDelta.y * verticalDegreesPerMeter,
+            Mathf.Atan2(
+                -desiredLeverDirection.y,
+                horizontalLength
+            ) * Mathf.Rad2Deg,
             minimumLocalX,
             maximumLocalX);
 
         float localY = Mathf.Clamp(
-            grabStartLocalY +
-            -worldDelta.x * horizontalDegreesPerMeter,
+            Mathf.Atan2(
+                desiredLeverDirection.x,
+                desiredLeverDirection.z
+            ) * Mathf.Rad2Deg,
             minimumLocalY,
             maximumLocalY);
 
@@ -191,20 +239,32 @@ public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
 
     public void EndTransform()
     {
+        hasValidGrabDirection = false;
+    }
+
+    private Vector3 WorldDirectionToParentSpace(
+        Vector3 worldDirection)
+    {
+        return leverPivot.parent != null
+            ? leverPivot.parent.InverseTransformDirection(
+                worldDirection
+            )
+            : worldDirection;
     }
 
     private void HandlePointerEvent(PointerEvent evt)
     {
         if (evt.Type == PointerEventType.Select)
         {
-            isGrabbed = true;
             isSnapping = false;
+            snapWhenReleased = false;
         }
-        else if (evt.Type == PointerEventType.Unselect)
+        else if (evt.Type == PointerEventType.Unselect ||
+                 evt.Type == PointerEventType.Cancel)
         {
-            isGrabbed = false;
-
-            SnapToNearestPlanet();
+            // Birden fazla interactable aynı Grabbable'ı izleyebilir. En son
+            // grab point bırakılmadan snap başlatma.
+            snapWhenReleased = true;
         }
     }
 
@@ -235,39 +295,34 @@ public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
         {
             SelectPlanet(
                 earthRotation,
-                earthDropdownIndex
+                EarthPresetIndex
             );
         }
         else if (marsDistance <= moonDistance)
         {
             SelectPlanet(
                 marsRotation,
-                marsDropdownIndex
+                MarsPresetIndex
             );
         }
         else
         {
             SelectPlanet(
                 moonRotation,
-                moonDropdownIndex
+                MoonPresetIndex
             );
         }
     }
 
     private void SelectPlanet(
         Vector3 rotation,
-        int dropdownIndex)
+        int presetIndex)
     {
-        targetRotation =
-            Quaternion.Euler(rotation);
+        selectedPresetIndex = presetIndex;
+        StartSnap(rotation);
 
-        isSnapping = true;
-
-        if (planetDropdown != null)
-        {
-            planetDropdown.value = dropdownIndex;
-            planetDropdown.RefreshShownValue();
-        }
+        if (springSimulation != null)
+            springSimulation.SetGravityPreset(presetIndex);
     }
 
     private void SetImmediateRotation(Vector3 rotation)
@@ -277,5 +332,70 @@ public class PhysicalPlanetSelector : MonoBehaviour, ITransformer
 
         targetRotation =
             leverPivot.localRotation;
+
+        isSnapping = false;
+    }
+
+    private void StartSnap(Vector3 rotation)
+    {
+        targetRotation = Quaternion.Euler(rotation);
+        isSnapping = true;
+    }
+
+    private Vector3 GetRotationForPreset(int presetIndex)
+    {
+        switch (presetIndex)
+        {
+            case MoonPresetIndex:
+                return moonRotation;
+
+            case MarsPresetIndex:
+                return marsRotation;
+
+            default:
+                return earthRotation;
+        }
+    }
+
+    private int GetSimulationPresetIndex()
+    {
+        if (springSimulation == null)
+            return EarthPresetIndex;
+
+        float gravity = springSimulation.SelectedGravity;
+        float earthDistance = Mathf.Abs(gravity - 9.81f);
+        float moonDistance = Mathf.Abs(gravity - 1.62f);
+        float marsDistance = Mathf.Abs(gravity - 3.71f);
+
+        if (moonDistance <= earthDistance &&
+            moonDistance <= marsDistance)
+        {
+            return MoonPresetIndex;
+        }
+
+        if (marsDistance <= earthDistance)
+            return MarsPresetIndex;
+
+        return EarthPresetIndex;
+    }
+
+    private void ResolveSpringSimulation()
+    {
+        if (springSimulation != null)
+            return;
+
+        SpringSimulation[] simulations =
+            FindObjectsByType<SpringSimulation>(
+                FindObjectsInactive.Include
+            );
+
+        foreach (SpringSimulation simulation in simulations)
+        {
+            if (simulation.gameObject.scene != gameObject.scene)
+                continue;
+
+            springSimulation = simulation;
+            return;
+        }
     }
 }

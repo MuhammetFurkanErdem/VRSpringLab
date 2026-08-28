@@ -1,7 +1,7 @@
 using UnityEngine;
 using Oculus.Interaction;
 
-public class PhysicalSlowMotionLever : MonoBehaviour
+public class PhysicalSlowMotionLever : MonoBehaviour, ITransformer
 {
     [Header("References")]
     [SerializeField] private Transform leverPivot;
@@ -17,17 +17,35 @@ public class PhysicalSlowMotionLever : MonoBehaviour
 
     private bool isGrabbed;
     private bool isSnapping;
+    private bool snapWhenReleased;
     private bool isSlowMotion;
 
     private Quaternion targetRotation;
 
     private float lockedY;
     private float lockedZ;
+    private Vector3 lockedLocalPosition;
+    private Vector3 lockedLocalScale;
+
+    private IGrabbable activeGrabbable;
+    private Vector3 grabStartVector;
+    private Vector3 grabRotationAxis;
+    private float grabStartAngle;
+    private bool hasValidGrabVector;
 
     private void Awake()
     {
+        if (grabbable != null)
+        {
+            grabbable.MaxGrabPoints = 1;
+            grabbable.InjectOptionalOneGrabTransformer(this);
+        }
+
         if (leverPivot == null)
             return;
+
+        lockedLocalPosition = leverPivot.localPosition;
+        lockedLocalScale = leverPivot.localScale;
 
         Vector3 euler = leverPivot.localEulerAngles;
 
@@ -61,6 +79,22 @@ public class PhysicalSlowMotionLever : MonoBehaviour
     {
         if (leverPivot == null || springSimulation == null)
             return;
+
+        isGrabbed =
+            grabbable != null &&
+            grabbable.GrabPoints.Count > 0;
+
+        if (isGrabbed)
+        {
+            isSnapping = false;
+            return;
+        }
+
+        if (snapWhenReleased)
+        {
+            snapWhenReleased = false;
+            SelectNearestState();
+        }
 
         // Reset veya başka bir sistem slow motion state'ini
         // değiştirdiyse fiziksel kol da onu takip etsin.
@@ -101,21 +135,115 @@ public class PhysicalSlowMotionLever : MonoBehaviour
         {
             isGrabbed = true;
             isSnapping = false;
+            snapWhenReleased = false;
         }
-        else if (evt.Type == PointerEventType.Unselect)
+        else if (evt.Type == PointerEventType.Unselect ||
+                 evt.Type == PointerEventType.Cancel)
         {
-            isGrabbed = false;
-            SelectNearestState();
+            snapWhenReleased = true;
         }
+    }
+
+    public void Initialize(IGrabbable initializedGrabbable)
+    {
+        activeGrabbable = initializedGrabbable;
+    }
+
+    public void BeginTransform()
+    {
+        if (leverPivot == null ||
+            activeGrabbable == null ||
+            activeGrabbable.GrabPoints.Count == 0)
+        {
+            return;
+        }
+
+        grabRotationAxis =
+            leverPivot.TransformDirection(Vector3.right).normalized;
+
+        Vector3 grabOffset =
+            activeGrabbable.GrabPoints[0].position -
+            leverPivot.position;
+
+        grabStartVector = Vector3.ProjectOnPlane(
+            grabOffset,
+            grabRotationAxis
+        );
+
+        hasValidGrabVector =
+            grabStartVector.sqrMagnitude > 0.000001f;
+
+        grabStartAngle = GetCurrentLocalX();
+    }
+
+    public void UpdateTransform()
+    {
+        if (!hasValidGrabVector ||
+            leverPivot == null ||
+            activeGrabbable == null ||
+            activeGrabbable.GrabPoints.Count == 0)
+        {
+            return;
+        }
+
+        Vector3 currentOffset =
+            activeGrabbable.GrabPoints[0].position -
+            leverPivot.position;
+
+        Vector3 currentVector = Vector3.ProjectOnPlane(
+            currentOffset,
+            grabRotationAxis
+        );
+
+        if (currentVector.sqrMagnitude <= 0.000001f)
+            return;
+
+        float angleDelta = Vector3.SignedAngle(
+            grabStartVector,
+            currentVector,
+            grabRotationAxis
+        );
+
+        float minimumAngle = Mathf.Min(
+            normalAngle,
+            slowMotionAngle
+        );
+        float maximumAngle = Mathf.Max(
+            normalAngle,
+            slowMotionAngle
+        );
+
+        float localX = Mathf.Clamp(
+            grabStartAngle + angleDelta,
+            minimumAngle,
+            maximumAngle
+        );
+
+        leverPivot.localPosition = lockedLocalPosition;
+        leverPivot.localScale = lockedLocalScale;
+        leverPivot.localRotation = Quaternion.Euler(
+            localX,
+            lockedY,
+            lockedZ
+        );
+    }
+
+    public void EndTransform()
+    {
+        hasValidGrabVector = false;
+    }
+
+    private float GetCurrentLocalX()
+    {
+        return Mathf.DeltaAngle(
+            0f,
+            leverPivot.localEulerAngles.x
+        );
     }
 
     private void SelectNearestState()
     {
-        float currentX =
-            Mathf.DeltaAngle(
-                0f,
-                leverPivot.localEulerAngles.x
-            );
+        float currentX = GetCurrentLocalX();
 
         float normalDistance =
             Mathf.Abs(
